@@ -1,0 +1,39 @@
+[package]
+name = "game-loop"
+version = "0.1.0"
+edition = "2021"
+
+default-run = "main"
+
+[lib]
+doctest = false
+bench = false
+test = false
+
+[[bin]]
+name = "main"
+path = "src/main.rs"
+
+[[bin]]
+name = "db_fill"
+path = "src/db/bin/fill_db.rs"
+
+[[bin]]
+name = "db_clean"
+path = "src/db/bin/clean_db.rs"
+
+[[bin]]
+name = "db_empty"
+path = "src/db/bin/empty_db.rs"
+
+
+[dependencies]
+rand = "0.8"
+itertools = "0.14.0"
+serde = "1.0.188"
+futures = "0.3.28"
+tokio = {version = "1.32.0", features = ["full"]}
+prettytable = "0.10"
+
+[dependencies.mongodb]
+version = "3.2.0"
