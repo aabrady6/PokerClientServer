@@ -76,12 +76,14 @@ pub struct Player {
     pub player_name: String,
     pub player_money: u32,
     pub round_win: i64,
+    pub last_move: String,
     total_games: u32,
     total_wins: u32,
     total_losses: u32,
     total_earnings: u32,
     pub total_wagered_per_game: u32,
     pub player_hand: Hand,
+    pub token: String,
     pub player_choices: HashMap<String, PlayerChoice>,
 }
 
@@ -108,11 +110,31 @@ impl Player {
             total_games: 0,
             total_wins: 0,
             round_win: 0,
+            last_move: "".to_string(),
             total_losses: 0,
             total_earnings: 0,
             total_wagered_per_game: 0,
             player_hand,
+            token: "".to_string(),
             player_choices,
+        }
+    }
+
+    pub fn empty() -> Self {
+        Self {
+            player_id: 0,
+            player_name: String::new(),
+            player_money: 0,
+            round_win: 0,
+            total_games: 0,
+            total_wins: 0,
+            total_losses: 0,
+            total_earnings: 0,
+            last_move: "".to_string(),
+            total_wagered_per_game: 0,
+            token: "".to_string(),
+            player_hand: Hand::new(0),
+            player_choices: HashMap::new(),
         }
     }
 
@@ -156,10 +178,12 @@ impl Player {
             player_money: 0,
             round_win: 0,
             player_choices,
+            last_move: "".to_string(),
             total_games: 0,
             total_wins: 0,
             total_losses: 0,
             total_wagered_per_game: 0,
+            token: "".to_string(),
             total_earnings: 0,
         }
     }
@@ -434,6 +458,7 @@ impl Player {
     /// ```
     pub fn reset_choices(&mut self) {
         self.player_choices.clear();
+        self.last_move.clear();
     }
 
     /// Prints the player's action choices for the current round.
@@ -465,8 +490,10 @@ impl Player {
     /// let mut player = Player::new("TestPlayer");
     /// player.new_round_choices();
     /// ```
-    pub fn new_round_choices(&mut self) {
+    pub async fn new_round_choices(&mut self) {
         self.player_choices.retain(|key, _| key == "Fold");
+        self.player_choices
+            .insert("PlacedInPot".to_string(), PlayerChoice::PlacedInPot(0));
     }
 
     /// Conduct the player action check
@@ -616,19 +643,18 @@ impl Player {
     /// player.bet(100 as u32);
     /// ```
     pub fn bet(&mut self, bet_amount: u32) {
-        if !self.player_choices.contains_key("Fold") {
-            self.player_choices.retain(|key, _| key == "PlacedInPot");
-            let current_bet = self
-                .player_choices
-                .entry("Bet".to_string())
-                .or_insert(PlayerChoice::Bet(0));
-            if let PlayerChoice::Bet(ref mut amount) = current_bet {
-                *amount += bet_amount;
-            }
-            self.add_to_placed_in_pot(bet_amount);
+        if let Some(PlayerChoice::PlacedInPot(ref mut amount)) =
+            self.player_choices.get_mut("PlacedInPot")
+        {
+            *amount += bet_amount;
         } else {
-            // Handle error
+            self.player_choices.insert(
+                "PlacedInPot".to_string(),
+                PlayerChoice::PlacedInPot(bet_amount),
+            );
         }
+        self.player_money -= bet_amount;
+        self.total_wagered_per_game += bet_amount;
     }
 
     /// Call to update or insert the PlacedInPot enum into the players choices
@@ -703,10 +729,15 @@ impl DbEntity for Player {
             total_wagered_per_game: doc
                 .get_i64("total_wagered_per_game")
                 .map_err(|e| e.to_string())? as u32,
+            last_move: doc
+                .get_str("last_move")
+                .map_err(|e| e.to_string())?
+                .to_string(),
             player_hand: bson::from_bson(
                 doc.get("player_hand").cloned().unwrap_or(bson::Bson::Null),
             )
             .map_err(|e| e.to_string())?,
+            token: doc.get_str("token").map_err(|e| e.to_string())?.to_string(),
             player_choices: bson::from_bson(
                 doc.get("player_choices")
                     .cloned()

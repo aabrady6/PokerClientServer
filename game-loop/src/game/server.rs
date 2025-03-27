@@ -1,59 +1,610 @@
-use crate::game::poker_game::PokerGame;
-use std::io;
-use std::io::Write;
-/// Define a generic Server struct, which is parameterized by a type T that implements the PokerGame trait.
-pub struct Server<T: PokerGame> {
-    pub game_type: T,
+use crate::game::client_messages::MessageType;
+use crate::game::game_state::GameState;
+use crate::game::player::Player;
+use actix::clock::timeout;
+use actix::{Actor, Addr, AsyncContext, Handler, Message as ActMessage, Running, StreamHandler};
+use actix_web::{get, post, web, HttpResponse, Responder};
+use actix_web_actors::ws::{self, Message, ProtocolError, WebsocketContext};
+use serde_json::from_str;
+use std::collections::HashSet;
+use std::sync::{Arc, Mutex, OnceLock};
+use tokio::sync::mpsc::Receiver;
+use tokio::sync::{broadcast, mpsc, Mutex as tMutex};
+use tokio::time::Duration;
+
+// allows games to tell server to broadcast game state to all clients
+pub static BROADCAST_SENDER: OnceLock<broadcast::Sender<()>> = OnceLock::new();
+
+// Custom message for broadcasting updates.
+struct BroadcastMessage(String);
+
+impl ActMessage for BroadcastMessage {
+    type Result = ();
 }
-/// Implement methods for the Server struct, which operates on a type that implements the PokerGame trait.
-impl<T: PokerGame> Server<T> {
-    /// Constructor function to initialize a new server instance with a specific Poker game type.
-    pub fn new(game_type: T) -> Self {
-        println!("Standard Poker initalize");
-        Self { game_type }
+
+impl Handler<BroadcastMessage> for WebSocketConnection {
+    type Result = ();
+
+    fn handle(&mut self, msg: BroadcastMessage, ctx: &mut Self::Context) {
+        ctx.text(msg.0);
+    }
+}
+
+// WebSocket actor to manage client connections.
+pub struct WebSocketConnection {
+    pub sessions: Arc<Mutex<HashSet<Addr<WebSocketConnection>>>>,
+    pub tx: mpsc::Sender<String>,
+}
+
+impl Actor for WebSocketConnection {
+    type Context = ws::WebsocketContext<Self>;
+
+    fn started(&mut self, ctx: &mut Self::Context) {
+        let addr = ctx.address();
+        {
+            let mut sessions = self.sessions.lock().unwrap();
+            sessions.insert(addr.clone());
+        }
+        println!(
+            "Rust: WebSocket connection started. Total sessions: {}",
+            self.sessions.lock().unwrap().len()
+        );
     }
 
-    /// The main game loop for playing the game. It repeatedly starts a new round and runs the game
-    /// until the user decides to stop playing.
-    pub async fn play_game(&mut self) {
-        loop {
-            //self.game_type.start_round();
-            self.game_type.game_run_through().await;
-            if Self::ask_another_round().await == 1 {
-                break;
+    fn stopping(&mut self, _ctx: &mut Self::Context) -> Running {
+        let mut sessions = self.sessions.lock().unwrap();
+        sessions.retain(|s| !s.connected());
+        println!(
+            "Rust: WebSocket connection stopping. Total sessions now: {}",
+            sessions.len()
+        );
+        Running::Stop
+    }
+}
+
+impl StreamHandler<Result<Message, ProtocolError>> for WebSocketConnection {
+    fn handle(&mut self, msg: Result<Message, ProtocolError>, ctx: &mut WebsocketContext<Self>) {
+        match msg {
+            Ok(Message::Text(text)) => {
+                println!("WebSocket received message: {}", text);
+                let tx = self.tx.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = tx.send(text.to_string()).await {
+                        eprintln!("Failed to send message to MPSC channel: {}", e);
+                    }
+                });
+                //let server_tx = tx.clone();
+                //let msg = text.clone(); // Send the received message to the mpsc channel.
+                //let _ = rx.send(msg).await;
             }
-            self.game_type.new_round().await;
+            Ok(Message::Ping(msg)) => {
+                ctx.pong(&msg);
+            }
+            Ok(Message::Close(reason)) => {
+                println!("WebSocket closing: {:?}", reason);
+            }
+            Err(err) => {
+                eprintln!("WebSocket error: {:?}", err);
+            }
+            _ => (),
+        }
+    }
+}
+/// Define a generic Server struct, which is parameterized by a type T that implements the PokerGame trait.
+///
+pub struct Server {
+    pub game_state: tMutex<GameState>,
+    pub sessions: Arc<Mutex<HashSet<Addr<WebSocketConnection>>>>,
+    pub broadcast_sender: broadcast::Sender<()>,
+    pub rx: tMutex<mpsc::Receiver<String>>,
+    pub mpsc_tx: mpsc::Sender<String>,
+}
+
+impl Server {
+    //****************************************************************
+    // INITIALIZATION FUNCTIONS
+    //****************************************************************
+
+    pub fn new() -> Arc<Self> {
+        println!("Standard Poker initalize");
+        let (tx, _rx) = broadcast::channel(100); // Create a broadcast channel
+        let (mpsc_tx, mpsc_rx) = mpsc::channel(100);
+        BROADCAST_SENDER.set(tx.clone()).ok();
+
+        let server = Arc::new(Self {
+            game_state: tMutex::new(GameState::new()),
+            sessions: Arc::new(Mutex::new(HashSet::new())),
+            broadcast_sender: tx,
+            rx: tMutex::new(mpsc_rx),
+            mpsc_tx,
+        });
+
+        // // 🔹 Spawn the listener in a new task
+        //let server_clone = server.clone();
+        //tokio::spawn(async move {
+        //    server_clone.listen_for_websocket_messages().await;
+        //});
+
+        server
+    }
+
+    //****************************************************************
+    // BROADCAST FUNCTIONS
+    //****************************************************************
+
+    /// Listener task to watch for broadcasts and trigger `broadcast_update`
+    pub async fn listen_for_broadcasts(self: Arc<Self>) {
+        let mut rx = self.broadcast_sender.subscribe();
+
+        loop {
+            match rx.recv().await {
+                Ok(()) => {
+                    println!("\nListen for broadcasts: Broadcast triggered! Updating clients...\n");
+
+                    // Clone the Arc before moving into the spawn
+                    let server_clone = self.clone();
+
+                    // Spawn broadcast as separate task
+                    tokio::spawn(async move {
+                        Self::broadcast_update(&server_clone).await;
+                    });
+                }
+                Err(e) => {
+                    println!("Listen for broadcasts: Broadcast listener error: {}", e);
+                }
+            }
         }
     }
 
-    /// This function asks the user if they would like to play another round. It returns 2 if the user chooses to continue
-    /// and 1 if they choose to stop playing. It validates user input and ensures they enter 'Y/y' or 'N/n'.
-    pub async fn ask_another_round() -> u8 {
-        let mut input = String::new();
-        loop {
-            println!("Would you like to stay in this game and play another round (Y/N)?");
-            io::stdout().flush().unwrap();
-            input.clear();
-            io::stdin()
-                .read_line(&mut input)
-                .expect("Failed to read line");
+    pub async fn broadcast_update(data: &Arc<Self>) {
+        println!("BROADCAST UPDATE CALLED");
+        // 1. Get game state with async lock
+        let message = match {
+            let game_lock = data.game_state.try_lock();
+            let game_lock = match game_lock {
+                Ok(lock) => lock,
+                Err(e) => {
+                    println!("lock error: {e}");
+                    return;
+                }
+            };
+            println!("got lock");
+            serde_json::to_string(&*game_lock)
+        } {
+            Ok(msg) => msg,
+            Err(e) => {
+                println!("Broadcast serialization error: {}", e);
+                return;
+            }
+        };
 
-            match input.trim().parse::<char>() {
-                Ok(result) => {
-                    // Check if bet is within the valid range
-                    if result == 'Y' || result == 'N' || result == 'y' || result == 'n' {
-                        if result == 'Y' || result == 'y' {
-                            return 2;
-                        }
-                        return 1;
+        println!("Broadcast message prepared.");
+
+        // 2. Get sessions with blocking lock (brief)
+        let sessions = data.sessions.lock().unwrap().clone();
+
+        // 3. Send to all connected sessions
+        println!("Broadcasting to {} sessions", sessions.len());
+        for session in sessions {
+            if session.connected() {
+                session.do_send(BroadcastMessage(message.clone()));
+            }
+        }
+    }
+
+    //****************************************************************
+    // GAME TYPE FUNCTIONS
+    //****************************************************************
+
+    pub async fn five_card_game(data: web::Data<Server>) {
+        {
+            let mut game_lock = data.game_state.lock().await;
+
+            game_lock.new_five_card_round().await;
+            tokio::task::yield_now().await;
+
+            //TODO: REMOVE THIS, just have it here for testing purposes
+            for i in 0..game_lock.players.len() {
+                game_lock.players[i].player_id = i as u32;
+            }
+        }
+        tokio::task::yield_now().await;
+        Server::broadcast_update(&data).await;
+
+        {
+            let mut game_lock = data.game_state.lock().await;
+            let player_index = game_lock.get_blinds_starting_player_index().await;
+            game_lock.set_current_player(player_index).await;
+        }
+        Server::betting_round(&data).await;
+
+        {
+            let mut game_lock = data.game_state.lock().await;
+            let player_index = game_lock.get_blinds_starting_player_index().await;
+            game_lock.set_current_player(player_index).await;
+            game_lock.new_discard_round().await;
+        }
+        Server::broadcast_update(&data).await;
+        Server::discard_round(&data).await;
+
+        {
+            let mut game_lock = data.game_state.lock().await;
+            let player_index = game_lock.get_blinds_starting_player_index().await;
+            game_lock.set_current_player(player_index).await;
+        }
+
+        Server::broadcast_update(&data).await;
+        Server::betting_round(&data).await;
+
+        {
+            let mut game_lock = data.game_state.lock().await;
+            game_lock.determine_winner_five_card().await;
+            if game_lock.winner.len() > 1 {
+                game_lock.current_action_string = format!(
+                    "Split Pot {} ways. Each win ${} Highest hand {}",
+                    game_lock.winner.len(),
+                    game_lock.pot / game_lock.winner.len() as u32,
+                    game_lock.winner[0].1
+                );
+            } else {
+                game_lock.current_action_string = format!(
+                    "{} wins ${} with hand {}",
+                    game_lock.winner[0].0.player_name, game_lock.pot, game_lock.winner[0].1
+                );
+            }
+            game_lock.pay_winners().await;
+        }
+
+        Server::broadcast_update(&data).await;
+
+        // write to db
+    }
+
+    pub async fn seven_card_game(data: web::Data<Server>) {}
+
+    pub async fn texas_card_game(data: web::Data<Server>) {}
+
+    //****************************************************************
+    // GAME SPECIFIC FUNCTIONS
+    //****************************************************************
+
+    #[allow(unused_assignments)]
+    pub async fn betting_round(data: &web::Data<Server>) {
+        let mut round_complete = false;
+        {
+            let mut game_lock = data.game_state.lock().await;
+
+            round_complete = game_lock.get_remaining_player_count() <= 1;
+
+            game_lock.new_betting_round().await;
+
+            if game_lock.round_number > 0 {
+                game_lock.current_player.new_round_choices().await;
+            }
+        }
+
+        while !round_complete {
+            Server::broadcast_update(data).await;
+            {
+                let mut game_lock = data.game_state.lock().await;
+                round_complete = game_lock.is_betting_round_complete().await;
+                if round_complete {
+                    game_lock.round_number += 1;
+                    game_lock.new_betting_round().await;
+                    break;
+                }
+
+                if game_lock.get_remaining_player_count() == 1 {
+                    return;
+                }
+                while game_lock.current_player.player_choices.contains_key("Fold") {
+                    game_lock.update_current_player().await;
+                    let current_player_name = game_lock.current_player.player_name.clone();
+                    game_lock.current_action_string =
+                        format!("{} is currently betting", current_player_name);
+                }
+
+                game_lock.get_available_player_actions().await;
+
+                let current_player_name = game_lock.current_player.player_name.clone();
+                game_lock.current_action_string =
+                    format!("{} is currently betting", current_player_name);
+            }
+
+            Server::broadcast_update(data).await;
+
+            let mut game_round;
+            {
+                let mut rx = data.rx.lock().await;
+                let mut game_lock = data.game_state.lock().await;
+
+                game_round = game_lock.round_number;
+
+                if let Some(player_action) = Self::wait_for_player_action(&mut rx).await {
+                    game_lock.handle_player_betting_message(player_action).await;
+                } else {
+                    game_lock.current_player_fold().await;
+                    println!("No valid PlayerAction received in time. Player folds.");
+                }
+                game_lock.update_current_player().await;
+            }
+            Server::broadcast_update(data).await;
+
+            // this dumb block is to allow the big bling to bet in first round
+            if game_round == 0 {
+                let mut broadcast_flag = false;
+                {
+                    let mut game_lock = data.game_state.lock().await;
+
+                    if game_lock.get_remaining_player_count() == 1 {
+                        return;
+                    }
+
+                    let index_big =
+                        ((game_lock.dealer + 2) % game_lock.players.len() as u32) as usize;
+
+                    if game_lock.current_player.player_name
+                        != game_lock.players[index_big].player_name
+                        || game_lock.highest_bet != game_lock.minimum_bet
+                    {
+                        continue;
+                    }
+                    game_lock.get_available_player_actions().await;
+                    broadcast_flag = true;
+
+                    let current_player_name = game_lock.current_player.player_name.clone();
+                    game_lock.current_action_string =
+                        format!("{}'s is currently betting", current_player_name);
+                }
+                if broadcast_flag {
+                    Server::broadcast_update(data).await;
+                    let mut game_lock = data.game_state.lock().await;
+                    let mut rx = data.rx.lock().await;
+                    if let Some(player_action) = Self::wait_for_player_action(&mut rx).await {
+                        game_lock.handle_player_betting_message(player_action).await;
                     } else {
-                        println!("Result must be Y/N or y/n");
+                        game_lock.current_player_fold().await;
+                        println!("No valid PlayerAction received in time. Player folds.");
+                    }
+                    game_lock.update_current_player().await;
+                    Server::broadcast_update(data).await;
+                }
+            }
+        }
+        Server::broadcast_update(data).await;
+    }
+
+    #[allow(unused_assignments)]
+    pub async fn discard_round(data: &web::Data<Server>) {
+        let remaining_players;
+        {
+            let mut game_lock = data.game_state.lock().await;
+            game_lock.new_discard_round().await;
+            remaining_players = game_lock.get_remaining_player_count();
+            if game_lock.get_remaining_player_count() == 1 {
+                return;
+            }
+
+            while game_lock.current_player.player_choices.contains_key("Fold") {
+                game_lock.update_current_player().await;
+                let current_player_name = game_lock.current_player.player_name.clone();
+                game_lock.current_action_string =
+                    format!("{} is currently betting", current_player_name);
+            }
+
+            let current_player_name = game_lock.current_player.player_name.clone();
+            game_lock.current_action_string =
+                format!("{} is currently discarding", current_player_name);
+        }
+
+        Server::broadcast_update(data).await;
+
+        for _ in 0..remaining_players {
+            {
+                let mut rx = data.rx.lock().await;
+                let mut game_lock = data.game_state.lock().await;
+
+                if let Some(discard_action) = Self::wait_for_discard_action(&mut rx).await {
+                    game_lock
+                        .handle_player_discard_message(discard_action)
+                        .await;
+                } else {
+                    game_lock.current_player_fold().await;
+                    println!("No valid DiscardAction received in time. Player folds.");
+                }
+                game_lock.update_current_player().await;
+
+                let current_player_name = game_lock.current_player.player_name.clone();
+                game_lock.current_action_string =
+                    format!("{} is currently discarding", current_player_name);
+            }
+            Server::broadcast_update(data).await;
+        }
+    }
+
+    //****************************************************************
+    // SERVER SIDE GAME LISTENERS FUNCTIONS
+    //****************************************************************
+
+    pub async fn wait_for_player_action(rx: &mut Receiver<String>) -> Option<MessageType> {
+        let timeout_duration = Duration::from_secs(30);
+
+        loop {
+            match timeout(timeout_duration, rx.recv()).await {
+                Ok(Some(msg)) => {
+                    println!("Received WebSocket message: {}", msg);
+
+                    match from_str::<MessageType>(&msg) {
+                        Ok(MessageType::PlayerAction { .. }) => {
+                            println!("Valid PlayerAction received!");
+                            return Some(from_str(&msg).unwrap());
+                        }
+                        Ok(_) => {
+                            println!("Ignoring non-PlayerAction message...");
+                            continue;
+                        }
+                        Err(e) => {
+                            println!("Invalid message format: {}. Ignoring...", e);
+                            continue;
+                        }
                     }
                 }
+                Ok(None) => {
+                    println!("MPSC WebSocket channel closed.");
+                    return None;
+                }
                 Err(_) => {
-                    println!("Result must be Y/N or y/n");
+                    println!("Timeout: No PlayerAction received in 30 seconds.");
+                    return None;
                 }
             }
         }
     }
+
+    pub async fn wait_for_discard_action(rx: &mut Receiver<String>) -> Option<MessageType> {
+        let timeout_duration = Duration::from_secs(30);
+
+        loop {
+            match timeout(timeout_duration, rx.recv()).await {
+                Ok(Some(msg)) => {
+                    println!("Received WebSocket message: {}", msg);
+
+                    match from_str::<MessageType>(&msg) {
+                        Ok(MessageType::DiscardAction { .. }) => {
+                            println!("Valid DiscardAction received!");
+                            return Some(from_str(&msg).unwrap());
+                        }
+                        Ok(_) => {
+                            println!("Ignoring non-DiscardAction message...");
+                            continue;
+                        }
+                        Err(e) => {
+                            println!("Invalid message format: {}. Ignoring...", e);
+                            continue;
+                        }
+                    }
+                }
+                Ok(None) => {
+                    println!("MPSC WebSocket channel closed.");
+                    return None;
+                }
+                Err(_) => {
+                    println!("Timeout: No PlayerAction received in 30 seconds.");
+                    return None;
+                }
+            }
+        }
+    }
+}
+
+#[get("/game")]
+async fn get_game(data: web::Data<Server>) -> impl Responder {
+    let game_lock = data.game_state.lock().await;
+    HttpResponse::Ok().json(&*game_lock)
+}
+
+#[get("/ws/")]
+async fn websocket(
+    req: actix_web::HttpRequest,
+    stream: web::Payload,
+    data: web::Data<Server>,
+) -> impl Responder {
+    let sessions = data.sessions.clone();
+    let tx = data.mpsc_tx.clone();
+    let resp = ws::start(WebSocketConnection { sessions, tx }, &req, stream);
+    println!("Rust: WebSocket client connected!");
+    resp
+}
+
+#[post("/register/{player_name}")]
+#[allow(unused_assignments)]
+async fn register_player(
+    data: web::Data<Server>,
+    player_name: web::Path<String>,
+) -> impl Responder {
+    let player_name = player_name.into_inner();
+    println!("Rust: Registering player: {}", player_name);
+
+    {
+        let mut game_lock = data.game_state.lock().await;
+
+        if game_lock
+            .players
+            .iter()
+            .all(|p| p.get_name() != &player_name)
+        {
+            match game_lock.insert_player(&Player::new(&player_name)) {
+                Ok(()) => println!("Player added successfully!"),
+                Err(e) => println!("Error inserting player: {}", e),
+            }
+        }
+
+        println!("New players list: {:?}", game_lock.players);
+    }
+
+    // 2. Broadcast update AFTER state modification
+
+    Server::broadcast_update(&data).await;
+
+    let sessions_len = data.sessions.lock().unwrap().len();
+    if sessions_len >= 4 {
+        println!("Starting game now!!");
+        let server_data_clone = data.clone();
+
+        tokio::spawn(async move {
+            Server::five_card_game(server_data_clone).await;
+        });
+    } else {
+        println!("Waiting on more players to join...");
+    }
+
+    println!("Returning registration response...");
+
+    // 3. Prepare response with fresh lock
+    let response_state = {
+        let game_lock = data.game_state.lock().await;
+        let game_state = game_lock.get_game_state();
+        game_state.clone()
+    };
+
+    HttpResponse::Ok().json(response_state)
+}
+
+#[post("/handle_action/{player_name}")]
+async fn handle_action(
+    data: web::Data<Server>,
+    player_name: web::Path<String>,
+    action: web::Json<String>,
+    value: web::Json<String>,
+) -> impl Responder {
+    let player_name = player_name.into_inner();
+    let action_str = action.into_inner();
+    let action_amount = value.into_inner().parse::<u32>().unwrap_or(0);
+    println!("Rust: Handling action: {}", player_name);
+
+    // 1. Modify game state
+    {
+        let mut game_lock = data.game_state.lock().await;
+        // Check if there is a pending oneshot sender for this player.
+        if let Some(sender) = game_lock.pending_actions.remove(&player_name) {
+            // Send the action data to unblock the waiting future.
+            if sender.send((action_str, action_amount)).is_err() {
+                println!("Failed to send action for player {}", player_name);
+            }
+        } else {
+            println!("No pending action found for player {}", player_name);
+        }
+    } // 🔹 Lock released here
+
+    // 2. Broadcast update AFTER state modification
+    Server::broadcast_update(&data).await;
+
+    // 3. Prepare response with fresh lock
+    let response_state = {
+        let game_lock = data.game_state.lock().await;
+        let game_state = game_lock.get_game_state();
+        game_state.clone()
+    };
+
+    HttpResponse::Ok().json(response_state)
 }

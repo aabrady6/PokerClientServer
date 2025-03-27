@@ -10,12 +10,13 @@ use crate::game::card::{Card, Value};
 use crate::game::hand::Hand;
 use core::fmt;
 use itertools::Itertools;
+use serde::{Deserialize, Serialize};
 use std::{cmp::Ordering, collections::HashMap};
 
 /// A hand-like enum for holding the 'power level' of a poker hand.
 /// Can differentiate between different hand types, as well as
 /// within the same ScoredHand.
-#[derive(Debug, Eq, Clone, Copy, Hash)]
+#[derive(Debug, Eq, Clone, Copy, Hash, Serialize, Deserialize)]
 pub enum ScoredHand {
     StraightFlush([Value; 5]),
     FourOfAKind([Value; 5]),

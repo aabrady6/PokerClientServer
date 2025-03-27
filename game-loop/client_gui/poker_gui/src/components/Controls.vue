@@ -29,6 +29,7 @@
                 class="control_input"
                 type="text" 
                 :placeholder="placeholderText"
+               @input="validateInput"
             />
         </div>
     </div>
@@ -55,7 +56,7 @@ const inputText = ref("");
 const amountMin = ref(0);
 const amountMax = ref(0);
 
-const placeholderText = computed(() => `Enter amount between ${amountMin.value} and ${amountMax.value}...`);
+const placeholderText = computed(() => `Enter amount to raise the pot to for this betting round between ${amountMin.value} and ${amountMax.value}...`);
 
 const setInputVis = () => {
     inputsVisible.value = true;
@@ -82,8 +83,24 @@ const controlOnClick = (control) => {
     amountMax.value = control.amountMax ?? 0;
 }
 
+const validateInput = () => {
+    const numValue = Number(inputText.value);
+    
+    if (isNaN(numValue) || numValue < amountMin.value || numValue > amountMax.value) {
+        canSubmit.value = false;
+    } else {
+        canSubmit.value = true;
+    }
+};
+
 const submitOnClick = () => {
     if (!canSubmit.value) { return; }
+    
+    const numValue = Number(inputText.value);
+    if (selectedControlName.value === 'Raise' && (numValue < amountMin.value || numValue > amountMax.value)) {
+        return;
+    }
+
     canSubmit.value = false;
     amountMin.value = 0;
     amountMax.value = 0;
@@ -96,7 +113,21 @@ const emit = defineEmits(['click']);
 
 const onClick = () => {
     if (!props.disabled) {
-        emit('click', [selectedControlName.value, inputText.value]);
+        let message = {};
+
+        if (selectedControlName.value === 'Raise') {
+            message = {
+                action: selectedControlName.value,
+                betAmount: inputText.value,
+            };
+        } else {
+            message = {
+                action: selectedControlName.value,  
+                betAmount: 0,                                  
+                };
+        }
+
+        emit('click', message);
         selectedControlName.value = "";
     }
 };
