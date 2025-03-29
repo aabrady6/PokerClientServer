@@ -1,6 +1,7 @@
 use crate::game::client_messages::MessageType;
 use crate::game::game_state::GameState;
 use crate::game::player::Player;
+use crate::game::player::PlayerChoice;
 use actix::clock::timeout;
 use actix::{Actor, Addr, AsyncContext, Handler, Message as ActMessage, Running, StreamHandler};
 use actix_web::{get, post, web, HttpResponse, Responder};
@@ -66,7 +67,7 @@ impl StreamHandler<Result<Message, ProtocolError>> for WebSocketConnection {
     fn handle(&mut self, msg: Result<Message, ProtocolError>, ctx: &mut WebsocketContext<Self>) {
         match msg {
             Ok(Message::Text(text)) => {
-                println!("WebSocket received message: {}", text);
+                //println!("WebSocket received message: {}", text);
                 let tx = self.tx.clone();
                 tokio::spawn(async move {
                     if let Err(e) = tx.send(text.to_string()).await {
@@ -157,7 +158,7 @@ impl Server {
     }
 
     pub async fn broadcast_update(data: &Arc<Self>) {
-        println!("BROADCAST UPDATE CALLED");
+        //println!("BROADCAST UPDATE CALLED");
         // 1. Get game state with async lock
         let message = match {
             let game_lock = data.game_state.try_lock();
@@ -168,7 +169,7 @@ impl Server {
                     return;
                 }
             };
-            println!("got lock");
+            //println!("got lock");
             serde_json::to_string(&*game_lock)
         } {
             Ok(msg) => msg,
@@ -178,7 +179,7 @@ impl Server {
             }
         };
 
-        println!("Broadcast message prepared.");
+        //println!("Broadcast message prepared.");
 
         // 2. Get sessions with blocking lock (brief)
         let sessions = data.sessions.lock().unwrap().clone();
@@ -209,18 +210,18 @@ impl Server {
             }
         }
         tokio::task::yield_now().await;
-        Server::broadcast_update(&data).await;
 
         {
             let mut game_lock = data.game_state.lock().await;
             let player_index = game_lock.get_blinds_starting_player_index().await;
             game_lock.set_current_player(player_index).await;
         }
+        Server::broadcast_update(&data).await;
         Server::betting_round(&data).await;
 
         {
             let mut game_lock = data.game_state.lock().await;
-            let player_index = game_lock.get_blinds_starting_player_index().await;
+            let player_index = game_lock.get_starting_player_left_of_dealer().await;
             game_lock.set_current_player(player_index).await;
             game_lock.new_discard_round().await;
         }
@@ -229,8 +230,10 @@ impl Server {
 
         {
             let mut game_lock = data.game_state.lock().await;
-            let player_index = game_lock.get_blinds_starting_player_index().await;
+            let player_index = game_lock.get_starting_player_left_of_dealer().await;
             game_lock.set_current_player(player_index).await;
+            game_lock.demo_mode = "complete".to_string();
+            game_lock.highest_bet = 0;
         }
 
         Server::broadcast_update(&data).await;
@@ -260,15 +263,225 @@ impl Server {
         // write to db
     }
 
-    pub async fn seven_card_game(data: web::Data<Server>) {}
+    pub async fn seven_card_game(data: web::Data<Server>) {
+        {
+            let mut game_lock = data.game_state.lock().await;
 
-    pub async fn texas_card_game(data: web::Data<Server>) {}
+            game_lock.new_seven_card_round().await;
+            tokio::task::yield_now().await;
+
+            //TODO: REMOVE THIS, just have it here for testing purposes
+            for i in 0..game_lock.players.len() {
+                game_lock.players[i].player_id = i as u32;
+            }
+        }
+        tokio::task::yield_now().await;
+
+        {
+            let mut game_lock = data.game_state.lock().await;
+            let player_index = game_lock.determine_lowest_door().await;
+
+            game_lock.set_current_player(player_index).await;
+            game_lock.seven_card_antes(player_index).await;
+
+            game_lock.highest_bet = game_lock.minimum_bet;
+        }
+        Server::broadcast_update(&data).await;
+        Server::betting_round(&data).await;
+
+        {
+            let mut game_lock = data.game_state.lock().await;
+            game_lock.deal_face_up(1).await;
+
+            let player_index = game_lock.determine_highest_door().await;
+            game_lock.set_current_player(player_index).await;
+            game_lock.new_betting_round().await;
+        }
+        Server::broadcast_update(&data).await;
+        Server::betting_round(&data).await;
+
+        {
+            let mut game_lock = data.game_state.lock().await;
+            game_lock.deal_face_up(1).await;
+
+            let player_index = game_lock.determine_highest_door().await;
+            game_lock.set_current_player(player_index).await;
+            game_lock.new_betting_round().await;
+        }
+        Server::broadcast_update(&data).await;
+        Server::betting_round(&data).await;
+
+        {
+            let mut game_lock = data.game_state.lock().await;
+            game_lock.deal_face_up(1).await;
+
+            let player_index = game_lock.determine_highest_door().await;
+            game_lock.set_current_player(player_index).await;
+            game_lock.new_betting_round().await;
+        }
+        Server::broadcast_update(&data).await;
+        Server::betting_round(&data).await;
+
+        {
+            let mut game_lock = data.game_state.lock().await;
+            game_lock.deal_face_down(1).await;
+
+            let player_index = game_lock.determine_highest_door().await;
+            game_lock.set_current_player(player_index).await;
+            game_lock.demo_mode = "complete".to_string();
+            game_lock.highest_bet = 0;
+            game_lock.new_betting_round().await;
+        }
+        Server::broadcast_update(&data).await;
+        Server::betting_round(&data).await;
+
+        {
+            let mut game_lock = data.game_state.lock().await;
+            game_lock.determine_winner_seven_card().await;
+            if game_lock.winner.len() > 1 {
+                game_lock.current_action_string = format!(
+                    "Split Pot {} ways. Each win ${} Highest hand {}",
+                    game_lock.winner.len(),
+                    game_lock.pot / game_lock.winner.len() as u32,
+                    game_lock.winner[0].1
+                );
+            } else {
+                game_lock.current_action_string = format!(
+                    "{} wins ${} with hand {}",
+                    game_lock.winner[0].0.player_name, game_lock.pot, game_lock.winner[0].1
+                );
+
+                if game_lock.get_remaining_player_count() == 1 {
+                    game_lock.current_action_string = format!(
+                        "{} wins ${} due to all players folding",
+                        game_lock.winner[0].0.player_name, game_lock.pot
+                    );
+
+                    println!(
+                        "{} wins ${} due to everyone folding",
+                        game_lock.winner[0].0.player_name, game_lock.pot
+                    );
+                } else {
+                    println!(
+                        "{} wins ${} with hand {}",
+                        game_lock.winner[0].0.player_name, game_lock.pot, game_lock.winner[0].1
+                    );
+                }
+            }
+
+            game_lock.pay_winners().await;
+        }
+
+        Server::broadcast_update(&data).await;
+
+        // db write
+    }
+
+    pub async fn texas_card_game(data: web::Data<Server>) {
+        {
+            let mut game_lock = data.game_state.lock().await;
+
+            game_lock.new_texas_holdem_round().await;
+            tokio::task::yield_now().await;
+
+            //TODO: REMOVE THIS, just have it here for testing purposes
+            for i in 0..game_lock.players.len() {
+                game_lock.players[i].player_id = i as u32;
+            }
+        }
+        tokio::task::yield_now().await;
+
+        {
+            let mut game_lock = data.game_state.lock().await;
+            let player_index = game_lock.get_blinds_starting_player_index().await;
+            game_lock.set_current_player(player_index).await;
+        }
+        Server::broadcast_update(&data).await;
+        Server::betting_round(&data).await;
+
+        {
+            let mut game_lock = data.game_state.lock().await;
+            game_lock.deal_community_cards(3).await;
+        }
+
+        Server::broadcast_update(&data).await;
+
+        {
+            let mut game_lock = data.game_state.lock().await;
+            let player_index = game_lock.get_blinds_starting_player_index().await;
+            game_lock.set_current_player(player_index).await;
+        }
+        Server::broadcast_update(&data).await;
+        Server::betting_round(&data).await;
+
+        {
+            let mut game_lock = data.game_state.lock().await;
+            game_lock.deal_community_cards(1).await;
+        }
+        Server::broadcast_update(&data).await;
+
+        {
+            let mut game_lock = data.game_state.lock().await;
+            let player_index = game_lock.get_blinds_starting_player_index().await;
+            game_lock.set_current_player(player_index).await;
+        }
+        Server::broadcast_update(&data).await;
+        Server::betting_round(&data).await;
+
+        {
+            let mut game_lock = data.game_state.lock().await;
+            game_lock.deal_community_cards(1).await;
+            game_lock.demo_mode = "complete".to_string();
+            game_lock.highest_bet = 0;
+        }
+        Server::broadcast_update(&data).await;
+
+        {
+            let mut game_lock = data.game_state.lock().await;
+            let player_index = game_lock.get_blinds_starting_player_index().await;
+            game_lock.set_current_player(player_index).await;
+        }
+        Server::broadcast_update(&data).await;
+        Server::betting_round(&data).await;
+
+        {
+            let mut game_lock = data.game_state.lock().await;
+            game_lock.determine_winner_texas().await;
+            if game_lock.winner.len() > 1 {
+                game_lock.current_action_string = format!(
+                    "Split Pot {} ways. Each win ${} Highest hand {}",
+                    game_lock.winner.len(),
+                    game_lock.pot / game_lock.winner.len() as u32,
+                    game_lock.winner[0].1
+                );
+            } else {
+                game_lock.current_action_string = format!(
+                    "{} wins ${} with hand {}",
+                    game_lock.winner[0].0.player_name, game_lock.pot, game_lock.winner[0].1
+                );
+
+                if game_lock.get_remaining_player_count() == 1 {
+                    game_lock.current_action_string = format!(
+                        "{} wins ${} due to all players folding",
+                        game_lock.winner[0].0.player_name, game_lock.pot
+                    )
+                }
+            }
+            game_lock.pay_winners().await;
+        }
+
+        Server::broadcast_update(&data).await;
+
+        // db write
+    }
 
     //****************************************************************
     // GAME SPECIFIC FUNCTIONS
     //****************************************************************
 
+    #[allow(clippy::comparison_chain)]
     #[allow(unused_assignments)]
+    #[allow(unused_mut)]
     pub async fn betting_round(data: &web::Data<Server>) {
         let mut round_complete = false;
         {
@@ -285,6 +498,18 @@ impl Server {
 
         while !round_complete {
             Server::broadcast_update(data).await;
+
+            let mut demo_mode;
+            {
+                let game_lock = data.game_state.lock().await;
+                demo_mode = game_lock.demo_mode.clone();
+            }
+
+            if demo_mode == *"active" {
+                Self::handle_demo_mode_bet(data).await;
+                return;
+            }
+
             {
                 let mut game_lock = data.game_state.lock().await;
                 round_complete = game_lock.is_betting_round_complete().await;
@@ -320,17 +545,42 @@ impl Server {
 
                 game_round = game_lock.round_number;
 
-                if let Some(player_action) = Self::wait_for_player_action(&mut rx).await {
-                    game_lock.handle_player_betting_message(player_action).await;
-                } else {
-                    game_lock.current_player_fold().await;
-                    println!("No valid PlayerAction received in time. Player folds.");
+                match Self::wait_for_player_action(&mut rx).await {
+                    Some(player_action) => match player_action {
+                        MessageType::PlayerAction {
+                            player_name: _,
+                            action,
+                            bet_amount,
+                        } => {
+                            println!(
+                                "Received PlayerAction: Action: {}, BetAmount: {}",
+                                action, bet_amount
+                            );
+                            game_lock
+                                .handle_player_betting_message(action, bet_amount)
+                                .await;
+                        }
+                        MessageType::DemoMode {
+                            player_name: _,
+                            status,
+                        } => {
+                            println!("Received DemoMode action");
+                            game_lock.handle_demo_mode_message(status).await;
+                        }
+                        _ => {
+                            println!("Received an unexpected message type.");
+                        }
+                    },
+                    None => {
+                        println!("No PlayerAction received in time.");
+                        game_lock.current_player_fold().await;
+                    }
                 }
                 game_lock.update_current_player().await;
             }
             Server::broadcast_update(data).await;
 
-            // this dumb block is to allow the big bling to bet in first round
+            // this dumb block is to allow the big bling to bet in first round. gross
             if game_round == 0 {
                 let mut broadcast_flag = false;
                 {
@@ -360,12 +610,38 @@ impl Server {
                     Server::broadcast_update(data).await;
                     let mut game_lock = data.game_state.lock().await;
                     let mut rx = data.rx.lock().await;
-                    if let Some(player_action) = Self::wait_for_player_action(&mut rx).await {
-                        game_lock.handle_player_betting_message(player_action).await;
-                    } else {
-                        game_lock.current_player_fold().await;
-                        println!("No valid PlayerAction received in time. Player folds.");
+                    match Self::wait_for_player_action(&mut rx).await {
+                        Some(player_action) => match player_action {
+                            MessageType::PlayerAction {
+                                player_name: _,
+                                action,
+                                bet_amount,
+                            } => {
+                                println!(
+                                    "Received PlayerAction: Action: {}, BetAmount: {}",
+                                    action, bet_amount
+                                );
+                                game_lock
+                                    .handle_player_betting_message(action, bet_amount)
+                                    .await;
+                            }
+                            MessageType::DemoMode {
+                                player_name: _,
+                                status,
+                            } => {
+                                println!("Received DemoMode action");
+                                game_lock.handle_demo_mode_message(status).await;
+                            }
+                            _ => {
+                                println!("Received an unexpected message type.");
+                            }
+                        },
+                        None => {
+                            println!("No PlayerAction received in time.");
+                            game_lock.current_player_fold().await;
+                        }
                     }
+
                     game_lock.update_current_player().await;
                     Server::broadcast_update(data).await;
                 }
@@ -401,16 +677,42 @@ impl Server {
 
         for _ in 0..remaining_players {
             {
+                let game_lock = data.game_state.lock().await;
+                if game_lock.demo_mode == *"active".to_string() {
+                    return;
+                }
+            }
+
+            {
                 let mut rx = data.rx.lock().await;
                 let mut game_lock = data.game_state.lock().await;
 
-                if let Some(discard_action) = Self::wait_for_discard_action(&mut rx).await {
-                    game_lock
-                        .handle_player_discard_message(discard_action)
-                        .await;
-                } else {
-                    game_lock.current_player_fold().await;
-                    println!("No valid DiscardAction received in time. Player folds.");
+                match Self::wait_for_discard_action(&mut rx).await {
+                    Some(discard_action) => match discard_action {
+                        MessageType::DiscardAction {
+                            player_name,
+                            card_index,
+                        } => {
+                            println!("Received DiscardAction: Action: {:?}", card_index);
+                            game_lock
+                                .handle_player_discard_message(player_name, card_index)
+                                .await;
+                        }
+                        MessageType::DemoMode {
+                            player_name: _,
+                            status,
+                        } => {
+                            println!("Received DemoMode action");
+                            game_lock.handle_demo_mode_message(status).await;
+                        }
+                        _ => {
+                            println!("Received an unexpected message type.");
+                        }
+                    },
+                    None => {
+                        println!("No PlayerAction received in time.");
+                        game_lock.current_player_fold().await;
+                    }
                 }
                 game_lock.update_current_player().await;
 
@@ -420,6 +722,61 @@ impl Server {
             }
             Server::broadcast_update(data).await;
         }
+    }
+
+    pub async fn handle_demo_mode_bet(data: &web::Data<Server>) {
+        let mut game_lock = data.game_state.lock().await;
+        let mut check_vec: Vec<usize> = vec![];
+        let mut call_vec: Vec<usize> = vec![];
+        let mut fold_vec: Vec<usize> = vec![];
+
+        let highest_bet = game_lock.highest_bet;
+
+        for (idx, player) in game_lock.players.iter_mut().enumerate() {
+            if player.player_choices.contains_key("Fold") {
+                continue;
+            }
+
+            let placed_in_pot = match player.player_choices.get("PlacedInPot") {
+                Some(PlayerChoice::PlacedInPot(amount)) => *amount,
+                _ => 0,
+            };
+
+            if placed_in_pot == highest_bet {
+                check_vec.push(idx);
+            } else if player.player_money + placed_in_pot >= highest_bet {
+                call_vec.push(idx);
+            } else {
+                fold_vec.push(idx);
+            }
+        }
+
+        println!("CHECK VEC: {:?}", check_vec);
+        if !check_vec.is_empty() {
+            for idx in check_vec {
+                game_lock.set_current_player(idx).await;
+                game_lock.current_player_check().await;
+            }
+        }
+
+        println!("CALL VEC: {:?}", call_vec);
+        if !call_vec.is_empty() {
+            for idx in call_vec {
+                game_lock.set_current_player(idx).await;
+                game_lock.current_player_call().await;
+            }
+        }
+
+        println!("FOLD VEC: {:?}", fold_vec);
+        if !fold_vec.is_empty() {
+            for idx in fold_vec {
+                game_lock.set_current_player(idx).await;
+                game_lock.current_player_fold().await;
+            }
+        }
+
+        game_lock.round_number += 1;
+        game_lock.new_betting_round().await;
     }
 
     //****************************************************************
@@ -432,11 +789,15 @@ impl Server {
         loop {
             match timeout(timeout_duration, rx.recv()).await {
                 Ok(Some(msg)) => {
-                    println!("Received WebSocket message: {}", msg);
+                    //println!("Received WebSocket message: {}", msg);
 
                     match from_str::<MessageType>(&msg) {
                         Ok(MessageType::PlayerAction { .. }) => {
                             println!("Valid PlayerAction received!");
+                            return Some(from_str(&msg).unwrap());
+                        }
+                        Ok(MessageType::DemoMode { .. }) => {
+                            println!("Moving to demo mode");
                             return Some(from_str(&msg).unwrap());
                         }
                         Ok(_) => {
@@ -467,11 +828,15 @@ impl Server {
         loop {
             match timeout(timeout_duration, rx.recv()).await {
                 Ok(Some(msg)) => {
-                    println!("Received WebSocket message: {}", msg);
+                    //println!("Received WebSocket message: {}", msg);
 
                     match from_str::<MessageType>(&msg) {
                         Ok(MessageType::DiscardAction { .. }) => {
                             println!("Valid DiscardAction received!");
+                            return Some(from_str(&msg).unwrap());
+                        }
+                        Ok(MessageType::DemoMode { .. }) => {
+                            println!("Moving to demo mode");
                             return Some(from_str(&msg).unwrap());
                         }
                         Ok(_) => {
@@ -538,8 +903,6 @@ async fn register_player(
                 Err(e) => println!("Error inserting player: {}", e),
             }
         }
-
-        println!("New players list: {:?}", game_lock.players);
     }
 
     // 2. Broadcast update AFTER state modification
@@ -547,12 +910,14 @@ async fn register_player(
     Server::broadcast_update(&data).await;
 
     let sessions_len = data.sessions.lock().unwrap().len();
-    if sessions_len >= 4 {
+    if sessions_len >= 3 {
         println!("Starting game now!!");
         let server_data_clone = data.clone();
 
         tokio::spawn(async move {
-            Server::five_card_game(server_data_clone).await;
+            Server::texas_card_game(server_data_clone).await;
+            //Server::seven_card_game(server_data_clone).await;
+            //Server::five_card_game(server_data_clone).await;
         });
     } else {
         println!("Waiting on more players to join...");

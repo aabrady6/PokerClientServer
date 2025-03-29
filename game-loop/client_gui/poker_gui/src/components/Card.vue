@@ -24,6 +24,7 @@ import { computed } from 'vue';
 const props = defineProps({
   rank: String,
   suit: String,
+  faceUp: Boolean,
   selected: Boolean,
 });
 

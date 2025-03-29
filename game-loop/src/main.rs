@@ -13,7 +13,6 @@ use std::sync::{Arc, Mutex};
 
 mod db;
 pub mod game;
-pub mod game_type;
 mod ui;
 
 // #[tokio::main]

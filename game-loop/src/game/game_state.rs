@@ -6,6 +6,8 @@
 //!
 
 use crate::db::dbclient::{DbClient, DbEntity};
+use crate::game::card::Card;
+use crate::game::card::Suit;
 use crate::game::client_messages::MessageType;
 use crate::game::score_hands::get_best_5_card_hand;
 use crate::game::score_hands::get_best_from_7_card_hand;
@@ -31,7 +33,7 @@ pub struct GameState {
     pub game_id: u32,
     pub hand_size: u8,
     pub max_players: i64,
-    pub stage_number: u32,
+    pub demo_mode: String,
     pub round_number: u32,
     pub minimum_bet: u32,
     pub highest_bet: u32,
@@ -58,7 +60,7 @@ impl Clone for GameState {
             game_id: self.game_id,
             hand_size: self.hand_size,
             max_players: self.max_players,
-            stage_number: self.stage_number,
+            demo_mode: self.demo_mode.clone(),
             round_number: self.round_number,
             minimum_bet: self.minimum_bet,
             highest_bet: self.highest_bet,
@@ -88,7 +90,7 @@ impl Default for GameState {
             hand_size: 5,
             max_players: 5,
             pot: 0,
-            stage_number: 0,
+            demo_mode: "inactive".to_string(),
             round_number: 0,
             minimum_bet: 5,
             highest_bet: 0,
@@ -127,6 +129,7 @@ impl GameState {
         self.max_players = 7;
         self.pot = 0;
         self.minimum_bet = 5;
+        self.demo_mode = "inactive".to_string();
         self.round_number = 0;
         self.highest_bet = 0;
         self.winner = vec![];
@@ -141,7 +144,6 @@ impl GameState {
 
         for player in &mut self.players {
             player.reset_choices();
-            player.total_wagered_per_game = 0;
             player.round_win = 0;
             player.player_hand = Hand::new(5);
             player.infinite_money();
@@ -149,7 +151,8 @@ impl GameState {
 
         self.deal_face_down(5).await;
         self.put_blinds().await;
-        self.set_player_tokens();
+        self.set_player_tokens_blinds();
+        println!("Starting new 5 Card Draw.");
     }
 
     pub async fn new_seven_card_round(&mut self) {
@@ -164,6 +167,7 @@ impl GameState {
         self.max_players = 7;
         self.pot = 0;
         self.minimum_bet = 5;
+        self.demo_mode = "inactive".to_string();
         self.round_number = 0;
         self.highest_bet = 0;
         self.winner = vec![];
@@ -178,7 +182,6 @@ impl GameState {
 
         for player in &mut self.players {
             player.reset_choices();
-            player.total_wagered_per_game = 0;
             player.round_win = 0;
             player.player_hand = Hand::new(7);
             player.infinite_money();
@@ -186,8 +189,8 @@ impl GameState {
 
         self.deal_face_down(2).await;
         self.deal_face_up(1).await;
-        self.put_blinds().await;
-        self.set_player_tokens();
+        self.set_player_tokens_only_dealer();
+        println!("Starting new Seven Card Stud Game.");
     }
 
     pub async fn new_texas_holdem_round(&mut self) {
@@ -202,6 +205,7 @@ impl GameState {
         self.max_players = 7;
         self.pot = 0;
         self.minimum_bet = 5;
+        self.demo_mode = "inactive".to_string();
         self.round_number = 0;
         self.highest_bet = 0;
         self.winner = vec![];
@@ -216,7 +220,6 @@ impl GameState {
 
         for player in &mut self.players {
             player.reset_choices();
-            player.total_wagered_per_game = 0;
             player.round_win = 0;
             player.player_hand = Hand::new(2);
             player.infinite_money();
@@ -224,7 +227,9 @@ impl GameState {
 
         self.deal_face_down(2).await;
         self.put_blinds().await;
-        self.set_player_tokens();
+        self.set_player_tokens_blinds();
+
+        println!("Starting new Texas Hold Em Game.");
     }
 
     //****************************************************************
@@ -253,7 +258,11 @@ impl GameState {
         ((self.dealer + 3) % self.players.len() as u32) as usize
     }
 
-    pub async fn determine_lowest_door(&self) -> u32 {
+    pub async fn get_starting_player_left_of_dealer(&self) -> usize {
+        ((self.dealer + 1) % self.players.len() as u32) as usize
+    }
+
+    pub async fn determine_lowest_door(&self) -> usize {
         let mut lowest = self.players[0].clone();
         let mut lowest_index = 0;
 
@@ -271,30 +280,40 @@ impl GameState {
                 }
             }
         }
-
-        lowest_index as u32
+        println!(
+            "Player: {:?} has the lowest hand. They start the first betting round",
+            self.players[lowest_index].player_name
+        );
+        lowest_index
     }
 
-    pub async fn determine_highest_door(&self) -> u32 {
-        let mut highest = self.players[0].clone();
+    pub async fn determine_highest_door(&self) -> usize {
         let mut highest_index = 0;
+        let empty_vec: Vec<Card> = vec![Card::new(Value::Empty, Suit::Empty).unwrap(); 5];
+        let mut empty_hand = Hand::from_cards(empty_vec);
+        let mut highest_value: ScoredHand = ScoredHand::HighCard([Value::Empty; 5]);
 
         for (index, player) in self.players.iter().enumerate() {
             if !player.player_choices.contains_key("Fold") {
-                let mut face_up = player.player_hand.get_face_up_cards();
-                let player_value = face_up.get_largest_value();
-
-                let mut highest_face_up = highest.player_hand.get_face_up_cards();
-                let highest_value = highest_face_up.get_largest_value();
+                let face_up = player.player_hand.get_face_up_cards();
+                for (i, card) in face_up.cards.iter().enumerate() {
+                    if i < empty_hand.cards.len() {
+                        empty_hand.cards[i] = *card;
+                    }
+                }
+                let player_value = get_best_5_card_hand(&empty_hand);
 
                 if player_value > highest_value {
-                    highest = player.clone();
+                    highest_value = player_value;
                     highest_index = index;
                 }
             }
         }
-
-        highest_index as u32
+        println!(
+            "Player: {:?} has the highest hand. They start the betting round",
+            self.players[highest_index].player_name
+        );
+        highest_index
     }
 
     pub async fn put_blinds(&mut self) {
@@ -311,7 +330,18 @@ impl GameState {
         self.pot = self.minimum_bet + (self.minimum_bet / 2)
     }
 
-    pub fn set_player_tokens(&mut self) {
+    pub async fn seven_card_antes(&mut self, starting_idx: usize) {
+        for player in &mut self.players {
+            player.bet(2);
+            self.pot += 2;
+        }
+
+        self.players[starting_idx].bet(3);
+        self.pot += 3;
+        self.highest_bet = self.minimum_bet;
+    }
+
+    pub fn set_player_tokens_blinds(&mut self) {
         let index_small = ((self.dealer + 1) % self.players.len() as u32) as usize;
         let index_big = ((self.dealer + 2) % self.players.len() as u32) as usize;
 
@@ -324,6 +354,10 @@ impl GameState {
         if self.players[index_big].token != *"D".to_string() {
             self.players[index_big].token = "BB".to_string();
         }
+    }
+
+    pub fn set_player_tokens_only_dealer(&mut self) {
+        self.players[self.dealer as usize].token = "D".to_string();
     }
 
     //****************************************************************
@@ -364,7 +398,7 @@ impl GameState {
         }
 
         for _ in 0..num {
-            let _ = self.community_cards.draw(&mut self.deck, 1);
+            let _ = self.community_cards.draw_face_up(&mut self.deck, 1);
         }
     }
 
@@ -447,7 +481,7 @@ impl GameState {
                 i += 1;
             }
         } else {
-            println!("CANNNOOOOOOOTTT FIND THEM");
+            println!("Player not in game_state.player list");
             self.current_player = self.players[0].clone();
         }
     }
@@ -470,48 +504,39 @@ impl GameState {
 
         let max_raise = placed_in_pot + player.player_money;
 
-        println!("MIN: {:?}, MAX: {:?}", min_raise, max_raise);
         self.raise_min_max = (min_raise, max_raise);
     }
 
-    pub async fn handle_player_betting_message(&mut self, action_message: MessageType) {
-        if let MessageType::PlayerAction {
-            action,
-            player_name,
-            bet_amount,
-        } = action_message
-        {
-            println!("Player {:?} Action: {}", player_name, action);
-
-            match action.as_str() {
-                "Fold" => {
-                    self.current_player_fold().await;
-                    self.action_history
-                        .push(format!("{} folded", self.current_player.player_name));
-                }
-                "Check" => {
-                    self.current_player_check().await;
-                    self.action_history
-                        .push(format!("{} checked", self.current_player.player_name));
-                }
-                "Raise" => {
-                    self.current_player_bet(bet_amount).await;
-                    self.action_history.push(format!(
-                        "{} raised to {}",
-                        self.current_player.player_name, self.highest_bet
-                    ));
-                }
-                "Call" => {
-                    self.current_player_call().await;
-                    self.action_history
-                        .push(format!("{} called", self.current_player.player_name));
-                }
-                _ => {
-                    println!("Unknown action: {}", action);
-                }
+    pub async fn handle_player_betting_message(&mut self, action: String, bet_amount: u32) {
+        match action.as_str() {
+            "Fold" => {
+                self.current_player_fold().await;
+                self.action_history
+                    .push(format!("{} folded", self.current_player.player_name));
             }
-        } else {
-            println!("Received an unexpected message type: {:?}", action_message);
+            "Check" => {
+                self.current_player_check().await;
+                self.action_history
+                    .push(format!("{} checked", self.current_player.player_name));
+            }
+            "Raise" => {
+                self.current_player_bet(bet_amount).await;
+                self.action_history.push(format!(
+                    "{} raised to {}",
+                    self.current_player.player_name, self.highest_bet
+                ));
+            }
+            "Call" => {
+                self.current_player_call().await;
+                self.action_history
+                    .push(format!("{} called", self.current_player.player_name));
+            }
+            _ => {
+                println!("Unknown action: {}. Player folding", action);
+                self.current_player_fold().await;
+                self.action_history
+                    .push(format!("{} folded", self.current_player.player_name));
+            }
         }
     }
 
@@ -529,6 +554,7 @@ impl GameState {
         if let Some(player) = self.find_player_by_name().await {
             player.check();
             player.last_move = "Check".to_string();
+            println!("PLAYER CHECKED: {:?}", player.player_name);
         } else {
             println!("Player not found in the list.");
         }
@@ -545,6 +571,10 @@ impl GameState {
                 _ => 0,
             };
 
+            println!(
+                "HIGHEST: {:?}, put in pot: {:?}",
+                self.highest_bet, player_put_in_pot
+            );
             let call_amount = self.highest_bet - player_put_in_pot;
             self.pot += call_amount;
 
@@ -591,34 +621,32 @@ impl GameState {
         }
     }
 
-    pub async fn handle_player_discard_message(&mut self, discard_message: MessageType) {
-        if let MessageType::DiscardAction {
-            player_name,
-            card_index,
-        } = discard_message
+    pub async fn handle_player_discard_message(
+        &mut self,
+        player_name: String,
+        card_index: Vec<usize>,
+    ) {
+        if let Some(player) = self
+            .players
+            .iter_mut()
+            .find(|p| p.player_name == player_name)
         {
-            if let Some(player) = self
-                .players
-                .iter_mut()
-                .find(|p| p.player_name == player_name)
-            {
-                if card_index.is_empty() {
-                    return;
-                }
+            if card_index.is_empty() {
+                return;
+            }
 
-                for &index in &card_index {
-                    if index < player.player_hand.cards.len() {
-                        match self.deck.deal_card() {
-                            Ok(new_card) => {
-                                println!(
-                                    "Player {:?} is SWAPPING {:?} for the new card {:?}",
-                                    player.player_name, player.player_hand.cards[index], new_card
-                                );
-                                player.player_hand.cards[index] = new_card;
-                            }
-                            Err(e) => {
-                                println!("Error dealing card: {}", e);
-                            }
+            for &index in &card_index {
+                if index < player.player_hand.cards.len() {
+                    match self.deck.deal_card() {
+                        Ok(new_card) => {
+                            println!(
+                                "Player {:?} is swapping {:?} for the new card {:?}",
+                                player.player_name, player.player_hand.cards[index], new_card
+                            );
+                            player.player_hand.cards[index] = new_card;
+                        }
+                        Err(e) => {
+                            println!("Error dealing card: {}", e);
                         }
                     }
                 }
@@ -630,25 +658,13 @@ impl GameState {
     // SCORING ROUND
     //****************************************************************
 
-    pub async fn new_scoring_round(&mut self) {
-        self.rotate_dealer().await;
-    }
-
     #[allow(clippy::comparison_chain)]
     pub async fn determine_winner_five_card(&mut self) {
         let mut winners: Vec<(Player, ScoredHand)> = Vec::new();
         let mut best_hand = ScoredHand::HighCard([Value::Two; 5]);
 
-        //if self.get_remaining_player_count() <= 1 {
-        //    for player in self.players.iter() {
-        //        if !player.player_choices.contains_key("Fold") {
-        //            winners.push((player.clone(), best_hand));
-        //        }
-        //    }
-        //    self.winner = winners;
-        //    return;
-        //}
-        //
+        self.reveal_cards().await;
+
         for player in self.players.iter() {
             if !player.player_choices.contains_key("Fold") {
                 let best_hand_from_player = get_best_5_card_hand(&player.player_hand);
@@ -664,74 +680,96 @@ impl GameState {
         }
         self.winner = winners;
     }
-    //
-    //fn determine_winner_seven_card(&self) -> Vec<(u32, ScoredHand)> {
-    //    let mut winners: Vec<(u32, ScoredHand)> = Vec::new();
-    //    let mut best_hand = ScoredHand::HighCard([Value::Two; 5]);
-    //
-    //    if self.get_remaining_player_count() <= 1 {
-    //        for (index, player) in self.players.iter().enumerate() {
-    //            if !player.player_choices.contains_key("Fold") {
-    //                winners.push((index as u32, best_hand));
-    //            }
-    //        }
-    //        return winners;
-    //    }
-    //
-    //    for (index, player) in self.players.iter().enumerate() {
-    //        if !player.player_choices.contains_key("Fold") {
-    //            let best_hand_from_player = get_best_from_7_card_hand(&player.player_hand);
-    //
-    //            if best_hand_from_player > best_hand {
-    //                winners.clear();
-    //                winners.push((index as u32, best_hand_from_player));
-    //                best_hand = best_hand_from_player;
-    //            } else if best_hand_from_player == best_hand {
-    //                winners.push((index as u32, best_hand_from_player));
-    //            }
-    //        }
-    //    }
-    //    winners
-    //}
-    //
-    //fn determine_winner_texas(&self) -> Vec<(u32, ScoredHand)> {
-    //    let mut winners: Vec<(u32, ScoredHand)> = Vec::new();
-    //    let mut best_hand = ScoredHand::HighCard([Value::Two; 5]);
-    //
-    //    if self.get_remaining_player_count() <= 1 {
-    //        for (index, player) in self.players.iter().enumerate() {
-    //            if !player.player_choices.contains_key("Fold") {
-    //                winners.push((index as u32, best_hand));
-    //            }
-    //        }
-    //        return winners;
-    //    }
-    //
-    //    for (index, player) in self.players.iter().enumerate() {
-    //        if !player.player_choices.contains_key("Fold") {
-    //            let mut total_hand = Hand::new(7);
-    //
-    //            for card in self.community_cards.cards.clone() {
-    //                total_hand.cheat(card);
-    //            }
-    //
-    //            for card in player.player_hand.cards.clone() {
-    //                total_hand.cheat(card);
-    //            }
-    //
-    //            let best_hand_from_player = get_best_from_7_card_hand(&total_hand);
-    //
-    //            if best_hand_from_player > best_hand {
-    //                winners.clear();
-    //                winners.push((index as u32, best_hand_from_player));
-    //                best_hand = best_hand_from_player;
-    //            } else if best_hand_from_player == best_hand {
-    //                winners.push((index as u32, best_hand_from_player));
-    //            }
-    //        }
-    //    }
-    //    winners
-    //}
+
+    #[allow(clippy::comparison_chain)]
+    pub async fn determine_winner_seven_card(&mut self) {
+        let mut winners: Vec<(Player, ScoredHand)> = Vec::new();
+        let mut best_hand = ScoredHand::HighCard([Value::Empty; 5]);
+
+        self.reveal_cards().await;
+
+        if self.get_remaining_player_count() <= 1 {
+            for player in self.players.iter() {
+                if !player.player_choices.contains_key("Fold") {
+                    winners.push((player.clone(), best_hand));
+                    self.winner.push(winners[0].clone());
+                    return;
+                }
+            }
+        }
+
+        for player in self.players.iter() {
+            if !player.player_choices.contains_key("Fold") {
+                let best_hand_from_player = get_best_from_7_card_hand(&player.player_hand);
+
+                if best_hand_from_player > best_hand {
+                    winners.clear();
+                    winners.push((player.clone(), best_hand_from_player));
+                    best_hand = best_hand_from_player;
+                } else if best_hand_from_player == best_hand {
+                    winners.push((player.clone(), best_hand_from_player));
+                }
+            }
+        }
+
+        for player in winners {
+            self.winner.push(player);
+        }
+    }
+
+    #[allow(clippy::comparison_chain)]
+    pub async fn determine_winner_texas(&mut self) {
+        let mut highest_value: ScoredHand = ScoredHand::HighCard([Value::Empty; 5]);
+        let mut winners: Vec<(Player, ScoredHand)> = Vec::new();
+
+        self.reveal_cards().await;
+
+        if self.get_remaining_player_count() <= 1 {
+            for player in self.players.iter() {
+                if !player.player_choices.contains_key("Fold") {
+                    winners.push((player.clone(), highest_value));
+                    self.winner.push(winners[0].clone());
+                    return;
+                }
+            }
+        }
+
+        for player in self.players.iter() {
+            if !player.player_choices.contains_key("Fold") {
+                let mut combined_hand = Hand::new(7);
+                for card in player.player_hand.cards.clone() {
+                    combined_hand.cards.push(card);
+                }
+                for card in self.community_cards.cards.clone() {
+                    combined_hand.cards.push(card);
+                }
+
+                let best_hand_from_player = get_best_from_7_card_hand(&combined_hand);
+
+                if best_hand_from_player > highest_value {
+                    winners.clear();
+                    winners.push((player.clone(), best_hand_from_player));
+                    highest_value = best_hand_from_player;
+                } else if best_hand_from_player == highest_value {
+                    winners.push((player.clone(), best_hand_from_player));
+                }
+            }
+        }
+
+        for player in winners {
+            self.winner.push(player);
+        }
+    }
+
+    pub async fn reveal_cards(&mut self) {
+        for player in self.players.iter_mut() {
+            if !player.player_choices.contains_key("Fold") {
+                for card in player.player_hand.cards.iter_mut() {
+                    card.face_up = true;
+                }
+            }
+        }
+    }
 
     pub async fn pay_winners(&mut self) {
         let winner_count = self.winner.len();
@@ -745,9 +783,15 @@ impl GameState {
 
         for (winner, _) in self.winner.clone() {
             for player in self.players.iter_mut() {
+                player.total_games += 1;
                 if player.player_name == winner.player_name {
                     player.player_money += pot_share;
+                    player.total_earnings += pot_share;
+                    player.round_win = pot_share;
+                    player.total_wins += 1;
                     println!("{} won {} chips!", player.player_name, pot_share);
+                } else {
+                    player.total_losses += 1;
                 }
             }
         }
@@ -787,6 +831,10 @@ impl GameState {
             }
         }
         count
+    }
+
+    pub async fn handle_demo_mode_message(&mut self, status: String) {
+        self.demo_mode = status
     }
 }
 
@@ -835,7 +883,7 @@ impl DbEntity for GameState {
             "max_players": self.max_players,
             "hand_size": self.hand_size as i64,
             "pot": self.pot as i64,
-            "stage_number": self.stage_number as i64,
+            "demo_mode": self.demo_mode.clone(),
             "round_number": self.round_number as i64,
             "minimum_bet": self.minimum_bet as i64,
             "highest_bet": self.highest_bet as i64,
@@ -883,7 +931,7 @@ impl DbEntity for GameState {
                 .to_string(),
             hand_size: doc.get_i64("hand_size").map_err(|e| e.to_string())? as u8,
             pot: doc.get_i64("pot").map_err(|e| e.to_string())? as u32,
-            stage_number: doc.get_i64("stage_number").map_err(|e| e.to_string())? as u32,
+            demo_mode: doc.get_str("demo_mode").unwrap_or("").to_string(),
             round_number: doc.get_i64("round_number").map_err(|e| e.to_string())? as u32,
             minimum_bet: doc.get_i64("minimum_bet").map_err(|e| e.to_string())? as u32,
             highest_bet: doc.get_i64("highest_bet").map_err(|e| e.to_string())? as u32,

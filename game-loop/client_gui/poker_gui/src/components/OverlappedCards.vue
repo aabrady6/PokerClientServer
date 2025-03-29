@@ -2,7 +2,7 @@
   <div class="overlapped_container"  :style="containerStyle">
     <Card
         class="card_inst"
-        v-for="(card, i) in cards"
+        v-for="(card, i) in faceDownCards"
         :rank="card.rank"
         :suit="card.suit"
         :selected="card.selected"
@@ -21,10 +21,13 @@ const props = defineProps({
   /** @type {{
       rank: String,
       suit: String,
+      faceUp: Boolean,
       selected: Boolean,
     }[]} */
     cards: Array
 });
+
+const faceDownCards = computed(() => props.cards.filter((card) => !card.faceUp));
 
 const cardWidth = 68; //px, defined in Card.vue
 const cardHeight = 96; // determined experimentally
@@ -34,7 +37,7 @@ const containerStyle = computed(() => ({
   "--card-width": `${cardWidth}px`,
   "--card-height": `${cardHeight}px`,
   "--overlap-offset": `${overlapOffset}px`,
-  "--num-cards": props.cards.length,
+  "--num-cards": faceDownCards.value.length,
 }));
 </script>
 

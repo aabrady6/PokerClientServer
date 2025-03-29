@@ -170,6 +170,7 @@ pub enum Suit {
     Diamond = 1,
     Heart = 2,
     Spade = 3,
+    Empty = 4,
 }
 
 impl Suit {
@@ -231,6 +232,7 @@ impl TryFrom<Suit> for char {
             Suit::Club => 'C',
             Suit::Diamond => 'D',
             Suit::Heart => 'H',
+            Suit::Empty => 'E',
         })
     }
 }

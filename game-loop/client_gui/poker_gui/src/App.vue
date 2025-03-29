@@ -107,6 +107,7 @@ const playerNameEntered = ref(false);
 const minRaise = ref(0);
 const maxRaise = ref(0);
 const discardRound = ref(false);
+const demoMode = ref("");
 
 const isCurrentPlayer = computed(() => {
   return currentPlayer.value && currentPlayer.value.player_name === playerName.value;
@@ -134,6 +135,10 @@ const controls = computed(() => {
   }
 
   return [
+    {
+      name: "Demo Mode",
+      visible: demoMode.value === "inactive", 
+    },
     {
       name: "Fold",
       visible: !discardRound.value,  
@@ -212,6 +217,19 @@ const submitOnClick = () => {
 const onControlsClick = (message) => {
     const { action, betAmount } = message;
     
+    if (action === "Demo Mode") {
+    
+      const demoModeMessage = {
+        type: "DemoMode",
+        player_name: playerName.value,
+        status: "active"
+      };
+
+      socket.send(JSON.stringify(demoModeMessage));
+      console.log("Sent demo mode message:", demoModeMessage);
+      return;
+    }
+
     const betAmountNumber = Number.isNaN(Number(betAmount)) ? 0 : Math.max(0, betAmount);
 
     const payload = {
@@ -245,7 +263,7 @@ socket.onmessage = (event) => {
         
         // Update community cards
         if (data.community_cards?.cards) {
-            communityCards.value = data.community_cards.cards.map(card => [card, false]);
+            communityCards.value = data.community_cards.cards.map(card => [formatCard(card), false]);
         }
        
         // Update players
@@ -255,11 +273,11 @@ socket.onmessage = (event) => {
                 name: player.player_name,
                 totalCash: player.player_money,
                 betCash: player.player_choices?.PlacedInPot?.PlacedInPot || 0,
-                faceUpCards: [],
+                faceUpCards: player.player_hand.cards.filter(card => card.face_up).map(card => [formatCard(card), false]),
                 faceDownCards: player.player_name === playerName.value 
-                    ? player.player_hand.cards.map(card => [formatCard(card), false])
-                    : player.player_hand.cards.map(() => ["", false]),                
-                    lastMove: player.last_move,
+                  ? player.player_hand.cards.filter(card => !card.face_up).map(card => [formatCard(card), false]) 
+                  : player.player_hand.cards.filter(card => !card.face_up).map(() => ["", false]),
+                lastMove: player.last_move,
                 playerAction: player.player_action,
                 token: player.token,
             }));
@@ -280,6 +298,10 @@ socket.onmessage = (event) => {
 
         if (data.discard_cards_prompted !== undefined) {
             discardRound.value = data.discard_cards_prompted;
+        }
+
+        if (data.demo_mode !== undefined) {
+            demoMode.value = data.demo_mode;
         }
         
     } catch (e) {

@@ -75,12 +75,12 @@ pub struct Player {
     pub player_id: u32,
     pub player_name: String,
     pub player_money: u32,
-    pub round_win: i64,
+    pub round_win: u32,
     pub last_move: String,
-    total_games: u32,
-    total_wins: u32,
-    total_losses: u32,
-    total_earnings: u32,
+    pub total_games: u32,
+    pub total_wins: u32,
+    pub total_losses: u32,
+    pub total_earnings: u32,
     pub total_wagered_per_game: u32,
     pub player_hand: Hand,
     pub token: String,
@@ -569,64 +569,6 @@ impl Player {
         }
     }
 
-    /// Conduct the player action Raise
-    ///
-    /// We want to confirm that the player has not folded yet, if they have then we cannot raise.
-    /// Raising we dont care about any other actions and as a result want to only keep the amount placed in pot.
-    /// This again was from before and was kept for stats and can still be used for stats.
-    ///
-    /// Inputs:
-    ///  raise_amount - a u32 that represents how much we are putting as the raise amount, this amount should be determined
-    ///                by the game and passed back to this function for tracking
-    ///
-    /// ```
-    /// let mut player = Player::new("TestPlayer");
-    /// player.raise(100 as u32);
-    /// ```
-    pub fn raise(&mut self, raise_amount: u32) {
-        if !self.player_choices.contains_key("Fold") {
-            self.player_choices.retain(|key, _| key == "PlacedInPot");
-            let current_raise = self
-                .player_choices
-                .entry("Raise".to_string())
-                .or_insert(PlayerChoice::Raise(0));
-            if let PlayerChoice::Raise(ref mut amount) = current_raise {
-                *amount += raise_amount;
-            }
-            self.add_to_placed_in_pot(raise_amount);
-            self.remove_money(raise_amount);
-        } else {
-            // Handle error
-        }
-    }
-
-    /// Conduct the player action All In
-    ///
-    /// We want to confirm that the player has not folded yet, if they have then we cannot all in.
-    /// For all in we dont care about any other actions and as a result want to only keep the amount placed in pot.
-    /// This again was from before and was kept for stats and can still be used for stats.
-    /// This is identical to raise, but given the nature of an all in we can say it is a type of raise.
-    ///
-    /// Inputs:
-    ///  all_in_amount - a u32 that represents how much we are putting as the all in amount, this amount should be determined
-    ///                by the game and passed back to this function for tracking
-    ///
-    /// ```
-    /// let mut player = Player::new("TestPlayer");
-    /// player.all_in(100 as u32);
-    /// ```
-    pub fn all_in(&mut self, all_in_amount: u32) {
-        if !self.player_choices.contains_key("Fold") {
-            self.player_choices.retain(|key, _| key == "PlacedInPot");
-            self.player_choices
-                .insert("AllIn".to_string(), PlayerChoice::AllIn);
-            self.add_to_placed_in_pot(all_in_amount);
-            self.remove_money(all_in_amount);
-        } else {
-            // Handle error
-        }
-    }
-
     /// Conduct the player action Bet
     ///
     /// We want to confirm that the player has not folded yet, if they have then we cannot bet.
@@ -724,7 +666,7 @@ impl DbEntity for Player {
             total_games: doc.get_i64("total_games").map_err(|e| e.to_string())? as u32,
             total_wins: doc.get_i64("total_wins").map_err(|e| e.to_string())? as u32,
             total_losses: doc.get_i64("total_losses").map_err(|e| e.to_string())? as u32,
-            round_win: doc.get_i64("round_win").map_err(|e| e.to_string())? as i64,
+            round_win: doc.get_i64("round_win").map_err(|e| e.to_string())? as u32,
             total_earnings: doc.get_i64("total_earnings").map_err(|e| e.to_string())? as u32,
             total_wagered_per_game: doc
                 .get_i64("total_wagered_per_game")
