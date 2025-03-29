@@ -2,7 +2,7 @@ use crate::db::dbclient::DbClient;
 use crate::game::client_messages;
 use crate::game::game_state;
 use crate::game::player::Player;
-use game::server::{get_game, handle_action, register_player, websocket, Server};
+use game::server::{register_player, websocket, stats, Server};
 use std::error::Error;
 //use ui::menu::{game_stats_menu, main_menu, player_stats_menu, reset_stats_menu, welcome};
 
@@ -161,7 +161,7 @@ async fn main() -> std::io::Result<()> {
         server_clone.listen_for_broadcasts().await;
     });
 
-    println!("Rust backend listening on http://127.0.0.1:8080");
+    println!("Rust backend listening on http://0.0.0.0:8080");
     HttpServer::new(move || {
         App::new()
             .app_data(server_data.clone()) // ✅ Pass Arc<Server<T>> correctly
@@ -171,12 +171,11 @@ async fn main() -> std::io::Result<()> {
                     .allow_any_method()
                     .allow_any_header(),
             )
-            .service(get_game)
             .service(register_player)
-            .service(handle_action)
             .service(websocket)
-    })
-    .bind("127.0.0.1:8080")?
+            .service(stats)
+        })
+    .bind("0.0.0.0:8080")?
     .run()
     .await
 }

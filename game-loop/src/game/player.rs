@@ -652,6 +652,8 @@ impl DbEntity for Player {
             "total_wagered_per_game": self.total_wagered_per_game as i64,
             "player_hand": bson::to_bson(&self.player_hand).map_err(|e| e.to_string())?,
             "player_choices": bson::to_bson(&self.player_choices).map_err(|e| e.to_string())?,
+            "last_move": self.last_move.clone(),
+            "token": self.token.clone(),
         })
     }
 
@@ -677,15 +679,13 @@ impl DbEntity for Player {
                 .to_string(),
             player_hand: bson::from_bson(
                 doc.get("player_hand").cloned().unwrap_or(bson::Bson::Null),
-            )
-            .map_err(|e| e.to_string())?,
+            ).map_err(|e| e.to_string())?,
             token: doc.get_str("token").map_err(|e| e.to_string())?.to_string(),
             player_choices: bson::from_bson(
                 doc.get("player_choices")
                     .cloned()
                     .unwrap_or(bson::Bson::Null),
-            )
-            .map_err(|e| e.to_string())?,
+            ).map_err(|e| e.to_string())?,
         })
     }
 

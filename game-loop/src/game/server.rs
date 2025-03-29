@@ -1,12 +1,13 @@
+use crate::db::dbclient::DbClient;
 use crate::game::client_messages::MessageType;
 use crate::game::game_state::GameState;
 use crate::game::player::Player;
 use crate::game::player::PlayerChoice;
 use actix::clock::timeout;
 use actix::{Actor, Addr, AsyncContext, Handler, Message as ActMessage, Running, StreamHandler};
-use actix_web::{get, post, web, HttpResponse, Responder};
+use actix_web::{get, post, web, HttpRequest, HttpResponse, Responder};
 use actix_web_actors::ws::{self, Message, ProtocolError, WebsocketContext};
-use serde_json::from_str;
+use serde_json::{from_str, Map, Value};
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex, OnceLock};
 use tokio::sync::mpsc::Receiver;
@@ -256,6 +257,7 @@ impl Server {
                 );
             }
             game_lock.pay_winners().await;
+            game_lock.write_results_to_db().await;
         }
 
         Server::broadcast_update(&data).await;
@@ -860,12 +862,163 @@ impl Server {
             }
         }
     }
-}
 
-#[get("/game")]
-async fn get_game(data: web::Data<Server>) -> impl Responder {
-    let game_lock = data.game_state.lock().await;
-    HttpResponse::Ok().json(&*game_lock)
+    pub async fn handle_stats_request_message(stats_message: MessageType) -> Value {
+        if let MessageType::StatsMenu {
+            stats_menu_type,
+            selected_option,
+        } = stats_message
+        {
+
+            let uri = "mongodb://localhost:27017";
+            let db_client = DbClient::new(uri).await.unwrap();
+
+            let mut response = Map::new();
+
+            match stats_menu_type.as_str() {
+                "player" => {
+                    let result = db_client.query_all::<Player>().await;
+
+                    match result {
+                        Ok(players) => {
+                            if players.is_empty() {
+                                println!("No players found in the database.");
+                            } else {
+                                let mut players_json_arr = Vec::new();
+                                let mut players_json = Map::new();
+                                let mut playerids = Vec::new();
+                                let mut usernames = Vec::new();
+                                let mut money = Vec::new();
+                                let mut hands_played = Vec::new();
+                                let mut win_percentages = Vec::new();
+                                let mut wins = Vec::new();
+                                let mut losses = Vec::new();
+                                let mut total_earnings = Vec::new();
+                                for player in players {
+                                    let win_percent = if player.get_games() == 0 {
+                                        0.0
+                                    } else {
+                                        (player.get_wins() as f64 / player.get_games() as f64) * 100.0
+                                    };
+                                    let win_percent_formatted = format!("{:.2}", win_percent);
+                                    playerids.push(player.player_id);
+                                    usernames.push(player.player_name);
+                                    money.push(player.player_money);
+                                    hands_played.push(player.total_games);
+                                    win_percentages.push(win_percent_formatted.clone());
+                                    wins.push(player.total_wins);
+                                    losses.push(player.total_losses);
+                                    total_earnings.push(player.total_earnings);
+                                }
+                                for (i, _) in playerids.clone().iter().enumerate() {
+                                    players_json.insert("player_id".to_owned(), Value::Number(playerids[i].into()));
+                                    players_json.insert("username".to_owned(), Value::String(usernames[i].clone()));
+                                    players_json.insert("money".to_owned(), Value::Number(money[i].into()));
+                                    players_json.insert("hands_played".to_owned(), Value::Number(hands_played[i].into()));
+                                    players_json.insert("win_percentage".to_owned(), Value::String(win_percentages[i].clone()));
+                                    players_json.insert("wins".to_owned(), Value::Number(wins[i].into()));
+                                    players_json.insert("losses".to_owned(), Value::Number(losses[i].into()));
+                                    players_json.insert("total_earnings".to_owned(), Value::Number(total_earnings[i].into()));
+                                    players_json_arr.push(players_json.clone());
+                                }
+                                response.insert("player_data".to_owned(), Value::String(serde_json::to_string(&players_json_arr).expect("could not serialize players json")));
+                                return Value::Object(response);
+                            }
+                        }
+                        Err(e) => {
+                            println!("Error retrieving players: {}", e);
+                        }
+                    }
+                }
+                "games" => {
+                    let result = db_client.query_all::<GameState>().await;
+            
+                    match result {
+                        Ok(games) => {
+                            if games.is_empty() {
+                                println!("No games found in the database.");
+                            } else {
+                                let mut games_json_arr = Vec::new();
+                                let mut games_json = Map::new();
+                                let mut gameids = Vec::new();
+                                let mut variants = Vec::new();
+                                let mut players = Vec::new();
+                                let mut winners = Vec::new();
+                                let mut dealer = Vec::new();
+                                for game in games {
+                                    gameids.push(game.game_id);
+                                    variants.push(game.game_variant);
+                                    players.push(game.players.len());
+                                    winners.push(game.winner);
+                                    dealer.push(game.dealer);
+                                }
+                                for (i, _) in gameids.clone().iter().enumerate() {
+                                    games_json.insert("game_id".to_owned(), Value::Number(gameids[i].into()));
+                                    games_json.insert("game_variant".to_owned(), Value::String(variants[i].clone()));
+                                    games_json.insert("num_players".to_owned(), Value::Number(players[i].into()));
+                                    games_json.insert("winners".to_owned(), Value::Array(winners[i].iter().map(|(w, _)| Value::String(w.get_name().to_string())).collect()));
+                                    games_json.insert("dealer_idx".to_owned(), Value::Number(dealer[i].into()));
+                                    games_json_arr.push(games_json.clone());
+                                }
+                                response.insert("games_data".to_owned(), Value::String(serde_json::to_string(&games_json_arr).expect("could not serialize games json")));
+                                return Value::Object(response);
+                            }
+                        }
+                        Err(e) => {
+                            println!("Error retrieving games: {}", e);
+                        }
+                    }
+                }
+                "single_game" => {
+                    let user_search_game = GameState::new_dummy_game_state(selected_option.parse::<u32>().unwrap());
+                    let result = db_client.query_one(&user_search_game).await;
+
+                    match result {
+                        Ok(Some(retrieved_game)) => {
+                            // let mut searched_game: Vec<GameState> = Vec::new();
+                            // searched_game.push(retrieved_game);
+                            let mut single_game_json_arr = Vec::new();
+                            let mut single_game_json = Map::new();
+                            let mut playerids = Vec::new();
+                            let mut playernames = Vec::new();
+                            let mut hands = Vec::new();
+                            let mut total_wagereds = Vec::new();
+                            let mut chips_won = Vec::new();
+                            for player in retrieved_game.players {
+                                playerids.push(player.player_id);
+                                playernames.push(player.player_name);
+                                hands.push(player.player_hand);
+                                total_wagereds.push(player.total_wagered_per_game);
+                                chips_won.push(player.round_win);
+                            }
+                            for (i, _) in playerids.clone().iter().enumerate() {
+                                single_game_json.insert("player_id".to_owned(), Value::Number(playerids[i].into()));
+                                single_game_json.insert("player_name".to_owned(), Value::String(playernames[i].clone()));
+                                single_game_json.insert("hand".to_owned(), Value::Array(hands[i].cards.iter().map(|c| Value::String(c.to_string())).collect()));
+                                single_game_json.insert("total_wagered".to_owned(), Value::Number(total_wagereds[i].into()));
+                                single_game_json.insert("chips_won".to_owned(), Value::Number(chips_won[i].into()));
+                                single_game_json_arr.push(single_game_json.clone());
+                            }
+                            response.insert("single_game_data".to_owned(), Value::String(serde_json::to_string(&single_game_json_arr).expect("could not serialize single game json")));
+                            return Value::Object(response);
+                        }
+                        Ok(None) => {
+                            println!("\nGame not found.");
+                        }
+                        Err(e) => {
+                            println!("Error retrieving Game: {}", e);
+                        }
+                    }
+                }
+                _ => {
+                    println!("Unknown stats menu type: {}", stats_menu_type);
+                }
+            }
+        } else {
+            println!("Received an unexpected message type: {:?}", stats_message);
+        }
+        Value::Null
+    }
 }
 
 #[get("/ws/")]
@@ -879,6 +1032,34 @@ async fn websocket(
     let resp = ws::start(WebSocketConnection { sessions, tx }, &req, stream);
     println!("Rust: WebSocket client connected!");
     resp
+}
+
+#[get("/stats")]
+async fn stats(
+    req: HttpRequest
+) -> impl Responder {
+    println!("Rust: Getting stats from query: {:?}", req.query_string());
+
+    let params = web::Query::<MessageType>::from_query(req.query_string());
+
+    // TODO: do better error handling on if it does not match a message type
+
+    let response_json = Server::handle_stats_request_message(params.unwrap().into_inner()).await;
+
+    return match response_json {
+        Value::Null => {
+            let mut map = Map::new();
+            map.insert("player_data".to_string(),Value::String("".to_string()));
+            map.insert("games_data".to_string(), Value::String("".to_string()));
+            map.insert("single_game_data".to_string(), Value::String("".to_string()));
+            // println!("Sending back stats reponse: {:#?}", map);
+            HttpResponse::Ok().json(map)
+        }
+        _ => {
+            // println!("Sending back stats reponse: {:#?}", response_json);
+            HttpResponse::Ok().json(response_json)
+        }
+    };
 }
 
 #[post("/register/{player_name}")]
@@ -924,45 +1105,6 @@ async fn register_player(
     }
 
     println!("Returning registration response...");
-
-    // 3. Prepare response with fresh lock
-    let response_state = {
-        let game_lock = data.game_state.lock().await;
-        let game_state = game_lock.get_game_state();
-        game_state.clone()
-    };
-
-    HttpResponse::Ok().json(response_state)
-}
-
-#[post("/handle_action/{player_name}")]
-async fn handle_action(
-    data: web::Data<Server>,
-    player_name: web::Path<String>,
-    action: web::Json<String>,
-    value: web::Json<String>,
-) -> impl Responder {
-    let player_name = player_name.into_inner();
-    let action_str = action.into_inner();
-    let action_amount = value.into_inner().parse::<u32>().unwrap_or(0);
-    println!("Rust: Handling action: {}", player_name);
-
-    // 1. Modify game state
-    {
-        let mut game_lock = data.game_state.lock().await;
-        // Check if there is a pending oneshot sender for this player.
-        if let Some(sender) = game_lock.pending_actions.remove(&player_name) {
-            // Send the action data to unblock the waiting future.
-            if sender.send((action_str, action_amount)).is_err() {
-                println!("Failed to send action for player {}", player_name);
-            }
-        } else {
-            println!("No pending action found for player {}", player_name);
-        }
-    } // 🔹 Lock released here
-
-    // 2. Broadcast update AFTER state modification
-    Server::broadcast_update(&data).await;
 
     // 3. Prepare response with fresh lock
     let response_state = {

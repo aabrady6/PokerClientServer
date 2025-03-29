@@ -1,5 +1,8 @@
 <template>
-  <div class="app_container">
+  <div
+    class="app_container"
+    :class="{ unselectable: showEndMenu }"
+  >
     <input
         v-model="playerName"
         v-if="!playerNameEntered"
@@ -36,67 +39,59 @@
       >
           SUBMIT
       </div>
+      <div
+        v-if="winners.length"
+        class="control_button"
+        @click="clickEndMenu"
+      >
+        END MENU
+      </div>
+      <div
+        class="stats_menu"
+      >
+        <span
+          v-if="seeStats !== true"
+          class="control_button"
+          @click="openStatsMenu"
+        >
+          STATS
+        </span>
+        <div 
+          v-else
+          class="stats_menu_open"
+        >
+          <div class="close_btn" @click="closeStatsMenu" >X</div>
+          <Stats
+            :playerData="playerData"
+            :gamesData="gamesData"
+            :singleGameData="singleGameData"
+            @click="clickStatsMenu"
+            @back="onStatsBack"
+          />
+        </div>
+      </div>
     </template>
+  </div>
+  <div
+    v-if="showEndMenu"
+    class="end_menu"
+  >
+    <div class="close_btn" @click="closeEndMenu" >X</div>
+    <EndRoundScreen
+      v-bind="endMenuData"
+      @click="submitEndRound"
+    />
   </div>
 </template>
 
 <script setup>
 import Table from './components/Table.vue';
 import Controls from './components/Controls.vue';
+import EndRoundScreen from './components/EndRoundScreen.vue';
+import Stats from './components/Stats.vue';
 import { computed, ref, watch } from 'vue';
 
-const players = ref([
-  {
-    name: "Player1",
-    totalCash: 100,
-    betCash: 10,
-    faceUpCards: [["2H", false], ["3H", false], ["6C", false], ["JD", false]],
-    faceDownCards: [["AH", false], ["2D", false], ["TC", false], ["QS", false], ["7C", false]],
-    lastMove: "Check",
-    token: "D",
-  }, {
-    name: "Player2",
-    totalCash: 100,
-    betCash: 10,
-    faceUpCards: [["2H", false], ["3H", false], ["6C", false], ["JD", false]],
-    faceDownCards: [["", false], ["", false], ["", false], ["", false], ["", false]],
-    lastMove: "Check",
-    token: "SB",
-  }, {
-    name: "Player3",
-    totalCash: 100,
-    betCash: 10,
-    faceUpCards: [["2H", false], ["3H", false], ["6C", false], ["JD", false]],
-    faceDownCards: [["", false], ["", false], ["", false], ["", false], ["", false]],
-    lastMove: "Check",
-    token: "BB",
-  }, {
-    name: "Player4",
-    totalCash: 100,
-    betCash: 10,
-    faceUpCards: [["2H", false], ["3H", false], ["6C", false], ["JD", false]],
-    faceDownCards: [["", false], ["", false], ["", false], ["", false], ["", false]],
-    lastMove: "Check",
-    token: "",
-  }
-]);
-
-const formatCard = (card) => {
-            const valueMap = {
-                "Ace": "A", "Two": "2", "Three": "3", "Four": "4", "Five": "5",
-                "Six": "6", "Seven": "7", "Eight": "8", "Nine": "9", "Ten": "T",
-                "Jack": "J", "Queen": "Q", "King": "K"
-            };
-
-            const suitMap = {
-                "Heart": "H", "Diamond": "D", "Club": "C", "Spade": "S"
-            };
-
-            return `${valueMap[card.value]}${suitMap[card.suit]}`;
-        };
-
-
-
+const players = ref([]);
 const communityCards = ref([["AH", false], ["2D", false], ["TC", false], ["QS", false], ["7C", false]]);
 const pot = ref(500);
 const highestBet = ref(0);
@@ -108,6 +103,28 @@ const minRaise = ref(0);
 const maxRaise = ref(0);
 const discardRound = ref(false);
 const demoMode = ref("");
+const winners = ref([]);
+const showEndMenu = ref(false);
+const endMenuData = ref(null);
+const seeStats = ref(false);
+const playerData = ref([]);
+const gamesData = ref([]);
+const singleGameData = ref([]);
+
+// must be set by the server
+const selectCardsActive = ref(true);
+const currentAction = ref("Player1: Selecting cards to discard...");
+
+const winnersText = computed(() => {
+  if (winners.value.length) {
+    let text = "";
+    text += winners.value.join(", ");
+    text += " won the game!";
+    return text;
+  } else {
+    return "";
+  }
+});
 
 const isCurrentPlayer = computed(() => {
   return currentPlayer.value && currentPlayer.value.player_name === playerName.value;
@@ -161,9 +178,19 @@ const controls = computed(() => {
   ];
 });
 
-// must be set by the server
-const selectCardsActive = ref(true);
-const currentAction = ref("Player1: Selecting cards to discard...");
+const formatCard = (card) => {
+  const valueMap = {
+      "Ace": "A", "Two": "2", "Three": "3", "Four": "4", "Five": "5",
+      "Six": "6", "Seven": "7", "Eight": "8", "Nine": "9", "Ten": "T",
+      "Jack": "J", "Queen": "Q", "King": "K"
+  };
+
+  const suitMap = {
+      "Heart": "H", "Diamond": "D", "Club": "C", "Spade": "S"
+  };
+
+  return `${valueMap[card.value]}${suitMap[card.suit]}`;
+};
 
 const onCardClick = (card) => {
   if (!selectCardsActive.value) {
@@ -188,7 +215,7 @@ const formattedCard = typeof card === "object" ? formatCard(card) : card;
 }
 
 const submitOnClick = () => {
-  if (!discardRound) { return; }
+  if (!discardRound.value) { return; }
   
   selectCardsActive.value = false;
 
@@ -243,16 +270,112 @@ const onControlsClick = (message) => {
     console.log("Sent action:", payload);
 };
 
+const clickEndMenu = () => {
+  const dealerName = players.value.find(player => player.token === "D") ? players.value.find(player => player.token === "D").name : "";
+  const data = {
+      headerText: winnersText.value,
+      tableOptions: ["Play again", "Leave table"],
+      dealerOptions: ["Five-Card Draw", "Seven-Card Stud", "Texas Hold 'Em"],
+      isDealer: dealerName == playerName.value,
+    };
+    showEndMenu.value = true;
+    endMenuData.value = data;
+}
+
+async function clickStatsMenu(message) {
+  if (seeStats.value) {
+    const payload = {
+      type: "StatsMenu",
+      ...message,
+    };
+    console.log("Send stats option:", JSON.stringify(payload));
+
+    try {
+        const response = await fetch(`http://localhost:3000/stats?type=${payload.type}&stats_menu_type=${payload.stats_menu_type}&selected_option=${payload.selected_option}`, { 
+            method: "GET",
+        });
+        
+        if (!response.ok) {
+            const error = await response.text();
+            throw new Error(error);
+        }
+        
+        const data = await response.json();
+        console.log("Stats get response:", data);
+        
+        if (data.player_data) {
+          console.log("player data: ", data.player_data);
+          const inner_data = JSON.parse(data.player_data);
+          console.log("inner_data: ", inner_data);
+          playerData.value = inner_data;
+        }
+        
+        if (data.games_data) {
+          console.log("games data: ", data.games_data);
+          const inner_data = JSON.parse(data.games_data);
+          console.log("inner_data: ", inner_data);
+          gamesData.value = inner_data;
+        }
+        
+        if (data.single_game_data) {
+          console.log("single game data: ", data.single_game_data);
+          const inner_data = JSON.parse(data.single_game_data);
+          console.log("inner_data: ", inner_data);
+          singleGameData.value = inner_data;
+        }
+        
+    } catch (error) {
+        console.error("Get stats error:", error);
+        alert(`Get stats failed: ${error.message}`);
+    }
+  }
+}
+
+const onStatsBack = (statsToRemove) => {
+  if (statsToRemove == "single_game") {
+    singleGameData.value = [];
+  } else if (statsToRemove == "games") {
+    gamesData.value = [];
+  } else if (statsToRemove == "player") {
+    playerData.value = [];
+  }
+};
+
+const openStatsMenu = () => {
+  seeStats.value = true;
+  playerData.value = [];
+  gamesData.value = [];
+  singleGameData.value = [];
+}
+
+const closeStatsMenu = () => {
+  seeStats.value = false;
+}
+
+const closeEndMenu = () => {
+  showEndMenu.value = false;
+}
+
+const submitEndRound = (message) => {
+  const payload = {
+        type: "EndRound",
+        ...message,
+    };
+  socket.send(JSON.stringify(payload));
+  console.log("Send end option:", payload);
+  showEndMenu.value = false;
+  winners.value = [];
+}
 
 // Set up WebSocket connection
-const socket = new WebSocket("ws://localhost:8080/ws/");
+const socket = new WebSocket(`ws://localhost:8080/ws/`);
 socket.onerror = (error) => console.error("WebSocket error:", error);
 socket.onclose = () => console.log("WebSocket connection closed");
 // Add to WebSocket open handler
 socket.onopen = () => {
     console.log("WebSocket connection opened");
     // Request full state immediately after connection
-    fetchGameState();
+    // fetchGameState();
 };
 
 // Modify message handler for better debugging
@@ -282,8 +405,24 @@ socket.onmessage = (event) => {
                 token: player.token,
             }));
         }
-        pot.value = data.pot;
-        currentAction.value = data.current_action_string;
+
+        if (data.pot) {
+          pot.value = data.pot;
+        }
+
+        if (data.winner) {
+          if (data.winner.length) {
+            winners.value = data.winner.map(w => w[0].player_name);
+            showEndMenu.value = true;
+            clickEndMenu();
+          } else {
+            winners.value = [];
+          }
+        }
+        
+        if (data.current_action_string) {
+          currentAction.value = data.current_action_string;
+        }
 
         highestBet.value = data.highest_bet ?? 0;
 
@@ -309,52 +448,6 @@ socket.onmessage = (event) => {
     }
 };
 
-// Fallback: fetch game state periodically
-async function fetchGameState() {
-  // try {
-  //   const response = await fetch("http://localhost:3000/game");
-  //   const data = await response.json();
-  //   console.log("Fetched game state:", data);
-  //   const players_hands = data.players ? data.players.map((player) => player.player_hand.cards) : [];
-  //   console.log(`Players hands: ${players_hands}`);
-  //   renderHands(players_hands);
-  // } catch (error) {
-  //   console.error("Error fetching game state:", error);
-  // }
-}
-
-// Render hands from the game state
-function renderHands(serverPlayers) {
-  // console.log("Rendering players:", players);
-  
-  if (!serverPlayers || typeof serverPlayers !== "object") {
-      console.warn("Invalid players data format");
-      return;
-  }
-
-  players.value = [];
-
-  Object.entries(serverPlayers).forEach(([name, player]) => {
-    let newPlayer = {};
-    newPlayer['name'] = name;
-    newPlayer['totalCash'] = 100;
-    newPlayer['betCash'] = 10;
-    newPlayer['faceUpCards'] = [];
-    newPlayer['faceDownCards'] = [];
-    newPlayer['lastMove'] = "Check";
-    if (name === playerName.value) {
-        player.hand.forEach(card => {
-          newPlayer['faceDownCards'].push([card, false]);
-        });
-    } else {
-        player.hand.forEach(card => {
-          newPlayer['faceDownCards'].push(["", false]);
-        });
-    }
-    players.value.push(newPlayer);
-  });
-}
-
 async function joinGame() {
     console.log(`Joining game as ${playerName.value}`);
     try {
@@ -372,26 +465,12 @@ async function joinGame() {
         
         // Force initial render from WebSocket
         await new Promise(resolve => setTimeout(resolve, 50));
-        await fetchGameState();
+        // await fetchGameState();
         
     } catch (error) {
         console.error("Join error:", error);
         alert(`Join failed: ${error.message}`);
     }
-}
-
-async function removeCard(card) {
-  try {
-    console.log(`Removing card ${card} for player ${playerName.value}`);
-    await fetch("http://localhost:3000/remove-card", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ player: playerName.value, card }),
-    });
-    await fetchGameState();
-  } catch (error) {
-    console.error("Error removing card:", error);
-  }
 }
 
 </script>
@@ -402,12 +481,24 @@ async function removeCard(card) {
 .app_container {
   @apply flex flex-col justify-center items-center m-8 h-full;
 
+  &.unselectable {
+    @apply select-none;
+  }
+
   .action_info {
     @apply text-5xl font-bold;
   }
 
   .controls {
     @apply w-full m-4;
+  }
+
+  .stats_menu {
+    @apply absolute right-8 top-10 border border-black border-solid flex flex-row justify-center items-center bg-gray-300 w-fit overflow-y-auto overflow-x-hidden;
+
+    .stats_menu_open {
+      @apply flex flex-col justify-center items-center;
+    }
   }
   
   .control_button {
@@ -429,5 +520,13 @@ async function removeCard(card) {
         @apply bg-green-500;
     }
   }
+}
+.end_menu {
+  @apply absolute left-1/2 top-1/2 bg-white border-2 border-solid border-black drop-shadow-md;
+  -ms-transform: translate(-50%, -50%);
+  transform: translate(-50%, -50%);
+}
+.close_btn {
+  @apply rounded-md border border-solid border-black w-fit justify-self-end self-end p-2 m-2 cursor-pointer bg-white select-none;
 }
 </style>

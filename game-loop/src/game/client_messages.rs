@@ -16,4 +16,12 @@ pub enum MessageType {
         player_name: String,
         status: String,
     },
+    StatsMenu {
+        stats_menu_type: String,
+        selected_option: String,
+    },
+    EndRound {
+        option: String,
+        dealer_option: String,
+    }
 }

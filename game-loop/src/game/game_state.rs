@@ -48,8 +48,6 @@ pub struct GameState {
     pub current_action_string: String,
     pub action_history: Vec<String>,
     pub raise_min_max: (u32, u32),
-    #[serde(skip)]
-    pub pending_actions: HashMap<String, oneshot::Sender<(String, u32)>>,
 }
 
 impl Clone for GameState {
@@ -75,7 +73,6 @@ impl Clone for GameState {
             current_action_string: self.current_action_string.clone(),
             action_history: self.action_history.clone(),
             raise_min_max: self.raise_min_max,
-            pending_actions: HashMap::new(),
         }
     }
 }
@@ -103,7 +100,6 @@ impl Default for GameState {
             current_action_string: "".to_string(),
             action_history: Vec::new(),
             raise_min_max: (0, 0),
-            pending_actions: HashMap::new(),
         }
     }
 }
@@ -111,6 +107,31 @@ impl Default for GameState {
 impl GameState {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn new_dummy_game_state(id: u32) -> Self {
+        GameState {
+            players: Vec::new(),
+            deck: Deck::new(),
+            game_variant: "".to_string(),
+            game_id: id,
+            hand_size: 5,
+            max_players: 5,
+            pot: 0,
+            round_number: 0,
+            minimum_bet: 5,
+            highest_bet: 0,
+            dealer: 0,
+            winner: vec![],
+            current_player: Player::new(""),
+            player_action: String::new(),
+            community_cards: Hand::new(5),
+            discard_cards_prompted: false,
+            current_action_string: "".to_string(),
+            action_history: Vec::new(),
+            raise_min_max: (0, 0),
+            demo_mode: "inactive".to_string(),
+        }
     }
 
     //****************************************************************
@@ -140,7 +161,6 @@ impl GameState {
         self.current_action_string = "".to_string();
         self.action_history = Vec::new();
         self.raise_min_max = (0, 0);
-        self.pending_actions = HashMap::new();
 
         for player in &mut self.players {
             player.reset_choices();
@@ -178,7 +198,6 @@ impl GameState {
         self.current_action_string = "".to_string();
         self.action_history = Vec::new();
         self.raise_min_max = (0, 0);
-        self.pending_actions = HashMap::new();
 
         for player in &mut self.players {
             player.reset_choices();
@@ -216,7 +235,6 @@ impl GameState {
         self.current_action_string = "".to_string();
         self.action_history = Vec::new();
         self.raise_min_max = (0, 0);
-        self.pending_actions = HashMap::new();
 
         for player in &mut self.players {
             player.reset_choices();
@@ -890,13 +908,12 @@ impl DbEntity for GameState {
             "dealer": self.dealer as i64,
             "winner": bson::to_bson(&self.winner).map_err(|e| e.to_string())?,
             "current_player": bson::to_bson(&self.current_player).map_err(|e| e.to_string())?,
-            "player_action": bson::to_bson(&self.player_action).map_err(|e| e.to_string())?,
+            "player_action": &self.player_action.clone(),
             "community_cards": bson::to_bson(&self.community_cards).map_err(|e| e.to_string())?,
             "discard_cards_prompted": self.discard_cards_prompted,
             "current_action_string": self.current_action_string.clone(),
             "action_history": bson::to_bson(&self.action_history).map_err(|e| e.to_string())?,
             "raise_min_max": bson::to_bson(&self.raise_min_max).map_err(|e| e.to_string())?,
-            "pending_actions": "",
         })
     }
 
@@ -944,12 +961,10 @@ impl DbEntity for GameState {
                     .unwrap_or(bson::Bson::Null),
             )
             .map_err(|e| e.to_string())?,
-            player_action: bson::from_bson(
-                doc.get("betting_actions")
-                    .cloned()
-                    .unwrap_or(bson::Bson::Null),
-            )
-            .map_err(|e| e.to_string())?,
+            player_action: doc
+                .get_str("player_action")
+                .map_err(|e| e.to_string())?
+                .to_string(),
             community_cards: bson::from_bson(
                 doc.get("community_cards")
                     .cloned()
@@ -975,7 +990,6 @@ impl DbEntity for GameState {
                     .unwrap_or(bson::Bson::Null),
             )
             .map_err(|e| e.to_string())?,
-            pending_actions: HashMap::new(),
         })
     }
 

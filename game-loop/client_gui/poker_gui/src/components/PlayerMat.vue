@@ -16,7 +16,10 @@
       <div class="last_move">Last move: {{ player.lastMove }}</div>
       <div class="total_cash">Total: ${{ player.totalCash }}</div>
     </div>
-    <div class="face_up">
+    <div
+      v-if="upCardsProper.length"
+      class="face_up"
+    >
       <Card
         v-if="type == 'full'"
         v-for="card in upCardsProper"
@@ -26,7 +29,10 @@
       />
       <OverlappedCards v-else :cards="upCardsProper" />
     </div>
-    <div class="face_down">
+    <div 
+      v-if="downCardsProper.length"
+      class="face_down"
+    >
       <Card
         v-if="type == 'full'"
         v-for="card in downCardsProper"
@@ -69,13 +75,17 @@ const props = defineProps({
   token: String,
 });
 
-const upCardsProper = computed(() =>
-  props.player.faceUpCards.map((card) => ({ rank: card[0][0], suit: card[0][1], selected: card[1] }))
-);
+const upCardsProper = computed(() => {
+  return (props.player.faceUpCards.length
+    ? props.player.faceUpCards.map((card) => ({ rank: card[0][0], suit: card[0][1], selected: card[1] }))
+    : []);
+});
 
-const downCardsProper = computed(() =>
-  props.player.faceDownCards.map((card) => ({ rank: card[0][0], suit: card[0][1], selected: card[1] }))
-);
+const downCardsProper = computed(() => {
+  return (props.player.faceDownCards.length
+    ? props.player.faceDownCards.map((card) => ({ rank: card[0][0], suit: card[0][1], selected: card[1] }))
+    : []);
+});
 
 const token_url = computed(() => {
   if (props.token == 'D') {

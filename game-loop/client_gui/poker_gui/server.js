@@ -11,21 +11,10 @@ app.use(express.json());
 // Enable CORS for all routes
 app.options("*", cors());
 
-app.get("/game", async (req, res) => {
-  try {
-    const response = await fetch("http://127.0.0.1:8080/game");
-    const gameState = await response.json();
-    res.json(gameState);
-  } catch (error) {
-    console.error("Express: Error fetching game state:", error);
-    res.status(500).json({ error: "Could not fetch game state" });
-  }
-});
-
 app.post("/register/:playerName", async (req, res) => {
   const { playerName } = req.params;
   try {
-    const response = await fetch(`http://127.0.0.1:8080/register/${playerName}`, {
+    const response = await fetch(`http://localhost:8080/register/${playerName}`, {
       method: "POST"
     });
     
@@ -42,66 +31,33 @@ app.post("/register/:playerName", async (req, res) => {
   }
 });
 
-app.post("/handle_action/:playerName", async (req, res) => {
-  const { playerName, action, value } = req.body;
-  console.log(`Express: Handling action ${action} with value ${value ?? 0} for player ${playerName}`);
+app.get("/stats", async (req, res) => {
+  console.log(req.query);
+  const {
+    type,
+    stats_menu_type,
+    selected_option,
+  } = req.query;
   try {
-    const response = await fetch(`http://127.0.0.1:8080/handle_action/${playerName}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(JSON.stringify(action), JSON.stringify(value)), // Match Rust's expected format
+    console.log("Getting stats with payload: ", type, stats_menu_type, selected_option);
+    const response = await fetch(`http://localhost:8080/stats?type=${type}&stats_menu_type=${stats_menu_type}&selected_option=${selected_option}`, {
+      method: "GET",
     });
-    const updatedGameState = await response.json();
-    res.json(updatedGameState);
+    
+    if (!response.ok) {
+      const error = await response.text();
+      return res.status(response.status).json({ error });
+    }
+
+    console.log("Stats response is ok!");
+    
+    const data = await response.json();
+    res.json(data);
   } catch (error) {
-    console.error("Express: Error handling action:", error);
-    res.status(500).json({ error: "Failed to handle action" });
+    console.error("Get stats error:", error);
+    res.status(500).json({ error: "Get stats failed" });
   }
 });
-
-// app.post("/remove-card", async (req, res) => {
-//   const { player, card } = req.body;
-//   console.log(`Express: Removing card ${card} for player ${player}`);
-//   try {
-//     const response = await fetch(`http://127.0.0.1:8080/remove-card/${player}`, {
-//       method: "POST",
-//       headers: { "Content-Type": "application/json" },
-//       body: JSON.stringify(card), // Match Rust's expected format
-//     });
-//     const updatedGameState = await response.json();
-//     res.json(updatedGameState);
-//   } catch (error) {
-//     console.error("Express: Error removing card:", error);
-//     res.status(500).json({ error: "Failed to remove card" });
-//   }
-// });
-
-// app.post("/reset-hand", async (req, res) => {
-//   const { player } = req.body;
-//   if (!player) {
-//     return res.status(400).json({ error: "Missing player name" });
-//   }
-  
-//   console.log(`Express: Received reset-hand for player: ${player}`);
-//   try {
-//     const response = await fetch(`http://127.0.0.1:8080/reset-hand/${player}`, { 
-//       method: "POST",
-//       headers: { "Content-Type": "application/json" },
-//       body: "{}" // Send empty JSON body to comply with Rust's expectations
-//     });
-
-//     if (!response.ok) {
-//       const error = await response.text();
-//       throw new Error(`Rust server error: ${error}`);
-//     }
-
-//     const updatedGameState = await response.json();
-//     res.json(updatedGameState);
-//   } catch (error) {
-//     console.error("Express: Error resetting hand:", error);
-//     res.status(500).json({ error: error.message });
-//   }
-// });
 
 app.listen(port, () => {
   console.log(`Express server running at http://127.0.0.1:${port}`);

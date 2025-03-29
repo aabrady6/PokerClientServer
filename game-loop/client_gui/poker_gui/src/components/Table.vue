@@ -1,14 +1,19 @@
 <template>
   <div class="table">
     <div class="community-area">
-      Community Cards:
-      <div class="cards">
-        <Card
-          v-for="card in communityCardsFormatted"
-          :rank="card.rank"
-          :suit="card.suit"
-          :selected="false"
-        />
+      <div
+        v-if="communityCardsFormatted.length"
+        class="community-cards"
+      >
+        Community Cards:
+        <div class="cards">
+          <Card
+            v-for="card in communityCardsFormatted"
+            :rank="card.rank"
+            :suit="card.suit"
+            :selected="false"
+          />
+        </div>
       </div>
       <div class="pot">Pot: ${{ pot }}</div>
     </div>
@@ -87,10 +92,15 @@ const onClick = (card) => {
 
   .community-area {
     @apply flex flex-col items-center gap-4 text-lg font-bold;
+    
+    .community-cards {
+      @apply flex flex-col justify-center items-center;
 
-    .cards {
-      @apply flex justify-center gap-2 mb-2;
+      .cards {
+        @apply flex justify-center gap-2 mb-2;
+      }
     }
+
 
     .pot {
       @apply text-2xl font-bold text-yellow-500;
