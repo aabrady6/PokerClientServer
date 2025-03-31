@@ -1,4 +1,5 @@
-use crate::db::dbclient::DbClient;
+use crate::db::auth::login_player;
+use crate::db::dbclient::{DbClient, MONGO_URI};
 use crate::game::client_messages::MessageType;
 use crate::game::game_state::GameState;
 use crate::game::player::Player;
@@ -7,7 +8,7 @@ use actix::clock::timeout;
 use actix::{Actor, Addr, AsyncContext, Handler, Message as ActMessage, Running, StreamHandler};
 use actix_web::{get, post, web, HttpRequest, HttpResponse, Responder};
 use actix_web_actors::ws::{self, Message, ProtocolError, WebsocketContext};
-use serde_json::{from_str, Map, Value};
+use serde_json::{from_str, json, Map, Value};
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex, OnceLock};
 use tokio::sync::mpsc::Receiver;
@@ -197,6 +198,13 @@ impl Server {
     //****************************************************************
     // GAME TYPE FUNCTIONS
     //****************************************************************
+
+    pub async fn game_lobby(data: web::Data<Server>) {
+        {
+            let mut rx_lock = data.rx.lock().await;
+            Self::wait_for_game_action(&mut rx_lock).await;
+        }
+    }
 
     pub async fn five_card_game(data: web::Data<Server>) {
         {
@@ -785,6 +793,41 @@ impl Server {
     // SERVER SIDE GAME LISTENERS FUNCTIONS
     //****************************************************************
 
+    pub async fn wait_for_game_action(rx: &mut Receiver<String>) -> Option<MessageType> {
+        let timeout_duration = Duration::from_secs(90);
+
+        loop {
+            match timeout(timeout_duration, rx.recv()).await {
+                Ok(Some(msg)) => {
+                    //println!("Received WebSocket message: {}", msg);
+
+                    match from_str::<MessageType>(&msg) {
+                        Ok(MessageType::GameSelection { .. }) => {
+                            println!("Valid Game Variety Found!");
+                            return Some(from_str(&msg).unwrap());
+                        }
+                        Ok(_) => {
+                            println!("Ignoring non-GameVariety message...");
+                            continue;
+                        }
+                        Err(e) => {
+                            println!("Invalid message format: {}. Ignoring...", e);
+                            continue;
+                        }
+                    }
+                }
+                Ok(None) => {
+                    println!("MPSC WebSocket channel closed.");
+                    return None;
+                }
+                Err(_) => {
+                    println!("Timeout: No PlayerAction received in 30 seconds.");
+                    return None;
+                }
+            }
+        }
+    }
+
     pub async fn wait_for_player_action(rx: &mut Receiver<String>) -> Option<MessageType> {
         let timeout_duration = Duration::from_secs(30);
 
@@ -869,8 +912,7 @@ impl Server {
             selected_option,
         } = stats_message
         {
-
-            let uri = "mongodb://localhost:27017";
+            let uri = &MONGO_URI;
             let db_client = DbClient::new(uri).await.unwrap();
 
             let mut response = Map::new();
@@ -898,7 +940,8 @@ impl Server {
                                     let win_percent = if player.get_games() == 0 {
                                         0.0
                                     } else {
-                                        (player.get_wins() as f64 / player.get_games() as f64) * 100.0
+                                        (player.get_wins() as f64 / player.get_games() as f64)
+                                            * 100.0
                                     };
                                     let win_percent_formatted = format!("{:.2}", win_percent);
                                     playerids.push(player.player_id);
@@ -911,17 +954,43 @@ impl Server {
                                     total_earnings.push(player.total_earnings);
                                 }
                                 for (i, _) in playerids.clone().iter().enumerate() {
-                                    players_json.insert("player_id".to_owned(), Value::Number(playerids[i].into()));
-                                    players_json.insert("username".to_owned(), Value::String(usernames[i].clone()));
-                                    players_json.insert("money".to_owned(), Value::Number(money[i].into()));
-                                    players_json.insert("hands_played".to_owned(), Value::Number(hands_played[i].into()));
-                                    players_json.insert("win_percentage".to_owned(), Value::String(win_percentages[i].clone()));
-                                    players_json.insert("wins".to_owned(), Value::Number(wins[i].into()));
-                                    players_json.insert("losses".to_owned(), Value::Number(losses[i].into()));
-                                    players_json.insert("total_earnings".to_owned(), Value::Number(total_earnings[i].into()));
+                                    players_json.insert(
+                                        "player_id".to_owned(),
+                                        Value::Number(playerids[i].into()),
+                                    );
+                                    players_json.insert(
+                                        "username".to_owned(),
+                                        Value::String(usernames[i].clone()),
+                                    );
+                                    players_json
+                                        .insert("money".to_owned(), Value::Number(money[i].into()));
+                                    players_json.insert(
+                                        "hands_played".to_owned(),
+                                        Value::Number(hands_played[i].into()),
+                                    );
+                                    players_json.insert(
+                                        "win_percentage".to_owned(),
+                                        Value::String(win_percentages[i].clone()),
+                                    );
+                                    players_json
+                                        .insert("wins".to_owned(), Value::Number(wins[i].into()));
+                                    players_json.insert(
+                                        "losses".to_owned(),
+                                        Value::Number(losses[i].into()),
+                                    );
+                                    players_json.insert(
+                                        "total_earnings".to_owned(),
+                                        Value::Number(total_earnings[i].into()),
+                                    );
                                     players_json_arr.push(players_json.clone());
                                 }
-                                response.insert("player_data".to_owned(), Value::String(serde_json::to_string(&players_json_arr).expect("could not serialize players json")));
+                                response.insert(
+                                    "player_data".to_owned(),
+                                    Value::String(
+                                        serde_json::to_string(&players_json_arr)
+                                            .expect("could not serialize players json"),
+                                    ),
+                                );
                                 return Value::Object(response);
                             }
                         }
@@ -932,7 +1001,7 @@ impl Server {
                 }
                 "games" => {
                     let result = db_client.query_all::<GameState>().await;
-            
+
                     match result {
                         Ok(games) => {
                             if games.is_empty() {
@@ -953,14 +1022,42 @@ impl Server {
                                     dealer.push(game.dealer);
                                 }
                                 for (i, _) in gameids.clone().iter().enumerate() {
-                                    games_json.insert("game_id".to_owned(), Value::Number(gameids[i].into()));
-                                    games_json.insert("game_variant".to_owned(), Value::String(variants[i].clone()));
-                                    games_json.insert("num_players".to_owned(), Value::Number(players[i].into()));
-                                    games_json.insert("winners".to_owned(), Value::Array(winners[i].iter().map(|(w, _)| Value::String(w.get_name().to_string())).collect()));
-                                    games_json.insert("dealer_idx".to_owned(), Value::Number(dealer[i].into()));
+                                    games_json.insert(
+                                        "game_id".to_owned(),
+                                        Value::Number(gameids[i].into()),
+                                    );
+                                    games_json.insert(
+                                        "game_variant".to_owned(),
+                                        Value::String(variants[i].clone()),
+                                    );
+                                    games_json.insert(
+                                        "num_players".to_owned(),
+                                        Value::Number(players[i].into()),
+                                    );
+                                    games_json.insert(
+                                        "winners".to_owned(),
+                                        Value::Array(
+                                            winners[i]
+                                                .iter()
+                                                .map(|(w, _)| {
+                                                    Value::String(w.get_name().to_string())
+                                                })
+                                                .collect(),
+                                        ),
+                                    );
+                                    games_json.insert(
+                                        "dealer_idx".to_owned(),
+                                        Value::Number(dealer[i].into()),
+                                    );
                                     games_json_arr.push(games_json.clone());
                                 }
-                                response.insert("games_data".to_owned(), Value::String(serde_json::to_string(&games_json_arr).expect("could not serialize games json")));
+                                response.insert(
+                                    "games_data".to_owned(),
+                                    Value::String(
+                                        serde_json::to_string(&games_json_arr)
+                                            .expect("could not serialize games json"),
+                                    ),
+                                );
                                 return Value::Object(response);
                             }
                         }
@@ -970,7 +1067,8 @@ impl Server {
                     }
                 }
                 "single_game" => {
-                    let user_search_game = GameState::new_dummy_game_state(selected_option.parse::<u32>().unwrap());
+                    let user_search_game =
+                        GameState::new_dummy_game_state(selected_option.parse::<u32>().unwrap());
                     let result = db_client.query_one(&user_search_game).await;
 
                     match result {
@@ -992,14 +1090,41 @@ impl Server {
                                 chips_won.push(player.round_win);
                             }
                             for (i, _) in playerids.clone().iter().enumerate() {
-                                single_game_json.insert("player_id".to_owned(), Value::Number(playerids[i].into()));
-                                single_game_json.insert("player_name".to_owned(), Value::String(playernames[i].clone()));
-                                single_game_json.insert("hand".to_owned(), Value::Array(hands[i].cards.iter().map(|c| Value::String(c.to_string())).collect()));
-                                single_game_json.insert("total_wagered".to_owned(), Value::Number(total_wagereds[i].into()));
-                                single_game_json.insert("chips_won".to_owned(), Value::Number(chips_won[i].into()));
+                                single_game_json.insert(
+                                    "player_id".to_owned(),
+                                    Value::Number(playerids[i].into()),
+                                );
+                                single_game_json.insert(
+                                    "player_name".to_owned(),
+                                    Value::String(playernames[i].clone()),
+                                );
+                                single_game_json.insert(
+                                    "hand".to_owned(),
+                                    Value::Array(
+                                        hands[i]
+                                            .cards
+                                            .iter()
+                                            .map(|c| Value::String(c.to_string()))
+                                            .collect(),
+                                    ),
+                                );
+                                single_game_json.insert(
+                                    "total_wagered".to_owned(),
+                                    Value::Number(total_wagereds[i].into()),
+                                );
+                                single_game_json.insert(
+                                    "chips_won".to_owned(),
+                                    Value::Number(chips_won[i].into()),
+                                );
                                 single_game_json_arr.push(single_game_json.clone());
                             }
-                            response.insert("single_game_data".to_owned(), Value::String(serde_json::to_string(&single_game_json_arr).expect("could not serialize single game json")));
+                            response.insert(
+                                "single_game_data".to_owned(),
+                                Value::String(
+                                    serde_json::to_string(&single_game_json_arr)
+                                        .expect("could not serialize single game json"),
+                                ),
+                            );
                             return Value::Object(response);
                         }
                         Ok(None) => {
@@ -1034,10 +1159,9 @@ async fn websocket(
     resp
 }
 
+#[allow(clippy::needless_return)]
 #[get("/stats")]
-async fn stats(
-    req: HttpRequest
-) -> impl Responder {
+async fn stats(req: HttpRequest) -> impl Responder {
     println!("Rust: Getting stats from query: {:?}", req.query_string());
 
     let params = web::Query::<MessageType>::from_query(req.query_string());
@@ -1049,9 +1173,12 @@ async fn stats(
     return match response_json {
         Value::Null => {
             let mut map = Map::new();
-            map.insert("player_data".to_string(),Value::String("".to_string()));
+            map.insert("player_data".to_string(), Value::String("".to_string()));
             map.insert("games_data".to_string(), Value::String("".to_string()));
-            map.insert("single_game_data".to_string(), Value::String("".to_string()));
+            map.insert(
+                "single_game_data".to_string(),
+                Value::String("".to_string()),
+            );
             // println!("Sending back stats reponse: {:#?}", map);
             HttpResponse::Ok().json(map)
         }
@@ -1062,56 +1189,157 @@ async fn stats(
     };
 }
 
-#[post("/register/{player_name}")]
+#[post("/login/{player_name}")]
 #[allow(unused_assignments)]
-async fn register_player(
+async fn player_login(
     data: web::Data<Server>,
     player_name: web::Path<String>,
+    login_message: web::Json<MessageType>,
 ) -> impl Responder {
     let player_name = player_name.into_inner();
-    println!("Rust: Registering player: {}", player_name);
+    let login_message = login_message.into_inner();
 
-    {
-        let mut game_lock = data.game_state.lock().await;
+    if let MessageType::UserLogin { username, password } = login_message {
+        if player_name != username {
+            return HttpResponse::BadRequest().json(json!({
+                "error": "Username mismatch",
+                "message": "Username in path does not match the username in the request body."
+            }));
+        }
 
-        if game_lock
-            .players
-            .iter()
-            .all(|p| p.get_name() != &player_name)
-        {
-            match game_lock.insert_player(&Player::new(&player_name)) {
-                Ok(()) => println!("Player added successfully!"),
-                Err(e) => println!("Error inserting player: {}", e),
+        match login_player(username.clone(), password.clone()).await {
+            Ok(player) => {
+                {
+                    let mut game_lock = data.game_state.lock().await;
+
+                    if let Some(existing_player) = game_lock
+                        .lobby
+                        .iter()
+                        .find(|p| p.player_name == player.player_name)
+                    {
+                        println!(
+                            "Player '{:?}' is being replaced in the lobby.",
+                            existing_player.player_name
+                        );
+
+                        game_lock
+                            .lobby
+                            .retain(|p| p.player_name != player.player_name);
+                    } else {
+                        println!(
+                            "Player '{}' is joining the lobby for the first time.",
+                            player.player_name
+                        );
+                    }
+
+                    game_lock.lobby.push(player.clone());
+                }
+
+                println!(
+                    "Login Successful: {:?}. Adding to Lobby",
+                    player.player_name
+                );
+                HttpResponse::Ok().json(json!({
+                    "message": "Login successful",
+                    "username": player.player_name
+                }))
+            }
+            Err(error_message) => {
+                println!("Login Unsuccessful");
+                HttpResponse::Unauthorized().json(json!({
+                    "error": error_message
+                }))
             }
         }
-    }
-
-    // 2. Broadcast update AFTER state modification
-
-    Server::broadcast_update(&data).await;
-
-    let sessions_len = data.sessions.lock().unwrap().len();
-    if sessions_len >= 3 {
-        println!("Starting game now!!");
-        let server_data_clone = data.clone();
-
-        tokio::spawn(async move {
-            Server::texas_card_game(server_data_clone).await;
-            //Server::seven_card_game(server_data_clone).await;
-            //Server::five_card_game(server_data_clone).await;
-        });
     } else {
-        println!("Waiting on more players to join...");
+        HttpResponse::BadRequest().json(json!({
+            "error": "Invalid request format"
+        }))
     }
+}
 
-    println!("Returning registration response...");
+#[post("/register/{player_name}")]
+#[allow(unused_assignments)]
+async fn player_register(
+    data: web::Data<Server>,
+    player_name: web::Path<String>,
+    register_message: web::Json<MessageType>,
+) -> impl Responder {
+    let player_name = player_name.into_inner();
+    let register_message = register_message.into_inner();
 
-    // 3. Prepare response with fresh lock
-    let response_state = {
-        let game_lock = data.game_state.lock().await;
-        let game_state = game_lock.get_game_state();
-        game_state.clone()
-    };
+    if let MessageType::UserRegistration { username, password } = register_message {
+        if player_name != username {
+            return HttpResponse::BadRequest().json(json!({
+                "error": "Username mismatch",
+                "message": "Username in path does not match the username in the request body."
+            }));
+        }
 
-    HttpResponse::Ok().json(response_state)
+        let mut query_player = Player::empty();
+
+        query_player.player_name = username.clone();
+
+        let db_client = DbClient::new(&MONGO_URI).await.unwrap();
+
+        let result = db_client.query_one(&query_player).await;
+
+        match result {
+            Ok(Some(_retrieved_player)) => {
+                println!("Username already exists in DB. Registration unsuccessful.");
+                HttpResponse::Unauthorized().json(json!({
+                "error": "User already exists in db"
+                }))
+            }
+            Ok(None) => {
+                let new_id = db_client.get_new_player_id().await;
+
+                let inserted_player = match Player::new_player(username, password, new_id) {
+                    Ok(player) => player,
+                    Err(err) => {
+                        return HttpResponse::InternalServerError().json(json!({
+                            "error": format!("Failed to create player: {}", err)
+                        }))
+                    }
+                };
+                let insert_result = db_client.insert(&inserted_player).await;
+
+                match insert_result {
+                    Ok(Some(p)) => {
+                        println!(
+                            "Registration Successful: {:?}. Adding to Lobby",
+                            p.player_name
+                        );
+                        {
+                            let mut game_lock = data.game_state.lock().await;
+                            game_lock.lobby.push(p);
+                        }
+                        HttpResponse::Ok().json(json!({
+                            "message": "Login successful",
+                            "username": inserted_player.player_name
+                        }))
+                    }
+                    Ok(None) => {
+                        println!("Player was not inserted for an unknown reason.");
+                        HttpResponse::InternalServerError().json(json!({
+                            "error": "Unknown insertion failure"
+                        }))
+                    }
+                    Err(error_message) => {
+                        println!("Error inserting into DB. Registration unsuccessful.");
+                        HttpResponse::Unauthorized().json(json!({
+                        "error": error_message
+                        }))
+                    }
+                }
+            }
+            Err(e) => HttpResponse::BadRequest().json(json!({
+            "error": e
+            })),
+        }
+    } else {
+        HttpResponse::BadRequest().json(json!({
+            "error": "Invalid request format"
+        }))
+    }
 }

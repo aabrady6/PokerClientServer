@@ -11,11 +11,59 @@ app.use(express.json());
 // Enable CORS for all routes
 app.options("*", cors());
 
+app.post("/login/:playerName", async (req, res) => {
+  const { playerName } = req.params;
+  const { password } = req.body;
+
+  if (!password) {
+    return res.status(400).json({ error: "Password is required" });
+  }
+
+  try {
+    const response = await fetch(`http://localhost:8080/login/${playerName}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",  
+      },
+      body: JSON.stringify({
+        type: "UserLogin",
+        username: playerName,
+        password: password,
+      }),
+    });
+    
+    if (!response.ok) {
+      const error = await response.text();
+      return res.status(response.status).json({ error });
+    }
+    
+    const data = await response.json();
+    res.json(data);
+  } catch (error) {
+    console.error("Login error:", error);
+    res.status(500).json({ error: "Login failed" });
+  }
+});
+
 app.post("/register/:playerName", async (req, res) => {
   const { playerName } = req.params;
+  const { password } = req.body;
+
+  if (!password) {
+    return res.status(400).json({ error: "Password is required" });
+  }
+
   try {
     const response = await fetch(`http://localhost:8080/register/${playerName}`, {
-      method: "POST"
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",  
+      },
+      body: JSON.stringify({
+        type: "UserRegistration",
+        username: playerName,
+        password: password,
+      }),
     });
     
     if (!response.ok) {
@@ -30,6 +78,7 @@ app.post("/register/:playerName", async (req, res) => {
     res.status(500).json({ error: "Registration failed" });
   }
 });
+
 
 app.get("/stats", async (req, res) => {
   console.log(req.query);

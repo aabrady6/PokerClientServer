@@ -1,4 +1,4 @@
-use game_loop::db::dbclient::DbClient;
+use game_loop::db::dbclient::{DbClient, MONGO_URI};
 use game_loop::game::player::Player;
 use std::error::Error;
 
@@ -17,7 +17,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         "fake_vinny",
     ];
 
-    let uri = "mongodb://localhost:27017";
+    let uri = &MONGO_URI;
     let db_client = DbClient::new(uri).await?;
 
     for (_index, name) in player_names.iter().enumerate() {

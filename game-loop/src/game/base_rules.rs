@@ -1455,7 +1455,7 @@
 //    }
 //
 //    pub async fn write_results_to_db(&self) {
-//        let db_client = DbClient::new("mongodb://localhost:27017").await.unwrap();
+//        let db_client = DbClient::new(&MONGO_URI).await.unwrap();
 //        let _result = db_client.insert(self).await;
 //
 //        for player in self.players.clone() {

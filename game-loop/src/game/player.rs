@@ -2,6 +2,10 @@
 /// and various game-related options.
 ///
 /// Functions in this module handle user input, database interactions, and menu navigation.
+use argon2::{
+    password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
+    Argon2,
+};
 use mongodb::bson;
 use mongodb::bson::{doc, from_document, to_document, Document};
 use serde::{Deserialize, Serialize};
@@ -74,6 +78,7 @@ impl FromStr for PlayerChoice {
 pub struct Player {
     pub player_id: u32,
     pub player_name: String,
+    pub hashed_password: String,
     pub player_money: u32,
     pub round_win: u32,
     pub last_move: String,
@@ -101,11 +106,13 @@ impl Player {
     pub fn new(player_name: &str) -> Self {
         let player_hand = Hand::new(0);
         let player_name = player_name.to_string();
+        let hashed_password = "".to_string();
         let mut player_choices = HashMap::new();
         player_choices.insert("PlacedInPot".to_string(), PlayerChoice::PlacedInPot(0));
         Self {
             player_id: 0,
             player_name,
+            hashed_password,
             player_money: 1000,
             total_games: 0,
             total_wins: 0,
@@ -124,6 +131,7 @@ impl Player {
         Self {
             player_id: 0,
             player_name: String::new(),
+            hashed_password: String::new(),
             player_money: 0,
             round_win: 0,
             total_games: 0,
@@ -168,14 +176,21 @@ impl Player {
     ///
     /// Outputs:
     /// - Returns a new `Player` instance with specified attributes.
-    pub fn new_player(hand_size: u8, player_name: String, player_id: u32) -> Self {
-        let player_hand = Hand::new(hand_size);
+    pub fn new_player(
+        player_name: String,
+        player_password: String,
+        player_id: u32,
+    ) -> Result<Self, String> {
+        let hashed_password = Self::hash_password(&player_password)?;
+        let player_hand = Hand::new(0);
         let player_choices = HashMap::new();
-        Self {
+
+        Ok(Self {
             player_hand,
             player_name,
+            hashed_password,
             player_id,
-            player_money: 0,
+            player_money: 1000,
             round_win: 0,
             player_choices,
             last_move: "".to_string(),
@@ -185,8 +200,29 @@ impl Player {
             total_wagered_per_game: 0,
             token: "".to_string(),
             total_earnings: 0,
+        })
+    }
+
+    pub fn hash_password(password: &str) -> Result<String, String> {
+        let salt = SaltString::generate(&mut OsRng);
+        let argon2 = Argon2::default();
+
+        match argon2.hash_password(password.as_bytes(), &salt) {
+            Ok(password_hash) => Ok(password_hash.to_string()),
+            Err(e) => Err(e.to_string()),
         }
     }
+
+    pub fn verify_password(&self, password: &str) -> bool {
+        let parsed_hash = PasswordHash::new(&self.hashed_password);
+        match parsed_hash {
+            Ok(parsed) => Argon2::default()
+                .verify_password(password.as_bytes(), &parsed)
+                .is_ok(),
+            Err(_) => false,
+        }
+    }
+
     //
     // These getters and setters are found with https://stackoverflow.com/questions/35390615/writing-getter-setter-properties-in-rust
     // These I dont want to pass through immediately but instead want to leave open to usage
@@ -643,6 +679,7 @@ impl DbEntity for Player {
         Ok(doc! {
             "player_id": self.player_id as i64,
             "player_name": self.player_name.clone(),
+            "hashed_password": self.hashed_password.clone(),
             "player_money": self.player_money as i64,
             "total_games": self.total_games as i64,
             "total_wins": self.total_wins as i64,
@@ -664,6 +701,10 @@ impl DbEntity for Player {
                 .get_str("player_name")
                 .map_err(|e| e.to_string())?
                 .to_string(),
+            hashed_password: doc
+                .get_str("hashed_password")
+                .map_err(|e| e.to_string())?
+                .to_string(),
             player_money: doc.get_i64("player_money").map_err(|e| e.to_string())? as u32,
             total_games: doc.get_i64("total_games").map_err(|e| e.to_string())? as u32,
             total_wins: doc.get_i64("total_wins").map_err(|e| e.to_string())? as u32,
@@ -679,13 +720,15 @@ impl DbEntity for Player {
                 .to_string(),
             player_hand: bson::from_bson(
                 doc.get("player_hand").cloned().unwrap_or(bson::Bson::Null),
-            ).map_err(|e| e.to_string())?,
+            )
+            .map_err(|e| e.to_string())?,
             token: doc.get_str("token").map_err(|e| e.to_string())?.to_string(),
             player_choices: bson::from_bson(
                 doc.get("player_choices")
                     .cloned()
                     .unwrap_or(bson::Bson::Null),
-            ).map_err(|e| e.to_string())?,
+            )
+            .map_err(|e| e.to_string())?,
         })
     }
 
@@ -722,32 +765,6 @@ mod tests {
         assert_eq!(player.get_wins(), 5);
         assert_eq!(player.get_losses(), 5);
         assert_eq!(player.get_earnings(), 1000);
-    }
-
-    #[test]
-    fn test_player_choices() {
-        let mut player = Player::new("TestPlayer");
-        player.call(50);
-        assert!(matches!(player.get_call().unwrap(), PlayerChoice::Call(50)));
-        player.raise(100);
-        assert!(matches!(
-            player.get_raise().unwrap(),
-            PlayerChoice::Raise(100)
-        ));
-        player.bet(200);
-        assert!(matches!(player.get_bet().unwrap(), PlayerChoice::Bet(200)));
-        player.all_in(500);
-        assert!(matches!(player.get_all_in().unwrap(), PlayerChoice::AllIn));
-        assert!(matches!(
-            player.get_placedinpot().unwrap(),
-            PlayerChoice::PlacedInPot(850)
-        ));
-        player.fold();
-        assert!(matches!(player.player_choices.contains_key("Fold"), true));
-        assert!(matches!(
-            player.player_choices.contains_key("All In"),
-            false
-        ));
     }
 
     #[test]

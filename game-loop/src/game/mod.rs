@@ -1,7 +1,3 @@
-/// Base Rules: The base_rules.rs contains GameState; the difference in the naming is that base_rules.rs contains the base universal rules of poker which by virtue also has the GameState.
-/// GameState contains the core logic of the poker game that other files will call upon to update, retrieve, and push.
-/// GameState is generalized with many basic calls for individual poker games to call and execute to suit their needs.
-//pub mod base_rules;
 /// Card: The card.rs file contains two enums Value and Suit and a struct Card.
 /// There are translations from the enums values to Rust universal values.
 pub mod card;

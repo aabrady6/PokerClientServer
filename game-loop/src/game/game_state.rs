@@ -5,10 +5,9 @@
 //! GameState meant to be by in large asynchronous with updates being made to the database on game completion
 //!
 
-use crate::db::dbclient::{DbClient, DbEntity};
+use crate::db::dbclient::{DbClient, DbEntity, MONGO_URI};
 use crate::game::card::Card;
 use crate::game::card::Suit;
-use crate::game::client_messages::MessageType;
 use crate::game::score_hands::get_best_5_card_hand;
 use crate::game::score_hands::get_best_from_7_card_hand;
 use mongodb::bson;
@@ -21,8 +20,6 @@ use crate::game::hand::Hand;
 use crate::game::player::Player;
 use crate::game::player::PlayerChoice;
 use crate::game::score_hands::ScoredHand;
-use std::collections::HashMap;
-use tokio::sync::oneshot;
 
 /// A struct that represents the state of the game, containing essential information about the game setup,
 /// players, and current game status.
@@ -40,6 +37,7 @@ pub struct GameState {
     pub current_player: Player,
     pub player_action: String,
     pub players: Vec<Player>,
+    pub lobby: Vec<Player>,
     pub winner: Vec<(Player, ScoredHand)>,
     pub community_cards: Hand,
     pub pot: u32,
@@ -65,6 +63,7 @@ impl Clone for GameState {
             current_player: self.current_player.clone(),
             player_action: self.player_action.clone(),
             players: self.players.clone(),
+            lobby: self.lobby.clone(),
             winner: self.winner.clone(),
             community_cards: self.community_cards.clone(),
             pot: self.pot,
@@ -81,6 +80,7 @@ impl Default for GameState {
     fn default() -> Self {
         GameState {
             players: Vec::new(),
+            lobby: Vec::new(),
             deck: Deck::new(),
             game_variant: "".to_string(),
             game_id: 0,
@@ -93,7 +93,7 @@ impl Default for GameState {
             highest_bet: 0,
             dealer: 0,
             winner: vec![],
-            current_player: Player::new(""),
+            current_player: Player::empty(),
             player_action: String::new(),
             community_cards: Hand::new(5),
             discard_cards_prompted: false,
@@ -112,6 +112,7 @@ impl GameState {
     pub fn new_dummy_game_state(id: u32) -> Self {
         GameState {
             players: Vec::new(),
+            lobby: Vec::new(),
             deck: Deck::new(),
             game_variant: "".to_string(),
             game_id: id,
@@ -123,7 +124,7 @@ impl GameState {
             highest_bet: 0,
             dealer: 0,
             winner: vec![],
-            current_player: Player::new(""),
+            current_player: Player::empty(),
             player_action: String::new(),
             community_cards: Hand::new(5),
             discard_cards_prompted: false,
@@ -139,7 +140,7 @@ impl GameState {
     //****************************************************************
 
     pub async fn new_five_card_round(&mut self) {
-        let uri = "mongodb://localhost:27017";
+        let uri = &MONGO_URI;
         let db_client = DbClient::new(uri).await.unwrap();
         let game_id = db_client.get_new_game_id().await;
 
@@ -154,7 +155,7 @@ impl GameState {
         self.round_number = 0;
         self.highest_bet = 0;
         self.winner = vec![];
-        self.current_player = Player::new("");
+        self.current_player = Player::empty();
         self.player_action = String::new();
         self.community_cards = Hand::new(5);
         self.discard_cards_prompted = false;
@@ -176,7 +177,7 @@ impl GameState {
     }
 
     pub async fn new_seven_card_round(&mut self) {
-        let uri = "mongodb://localhost:27017";
+        let uri = &MONGO_URI;
         let db_client = DbClient::new(uri).await.unwrap();
         let game_id = db_client.get_new_game_id().await;
 
@@ -191,7 +192,7 @@ impl GameState {
         self.round_number = 0;
         self.highest_bet = 0;
         self.winner = vec![];
-        self.current_player = Player::new("");
+        self.current_player = Player::empty();
         self.player_action = String::new();
         self.community_cards = Hand::new(5);
         self.discard_cards_prompted = false;
@@ -213,7 +214,7 @@ impl GameState {
     }
 
     pub async fn new_texas_holdem_round(&mut self) {
-        let uri = "mongodb://localhost:27017";
+        let uri = &MONGO_URI;
         let db_client = DbClient::new(uri).await.unwrap();
         let game_id = db_client.get_new_game_id().await;
 
@@ -228,7 +229,7 @@ impl GameState {
         self.round_number = 0;
         self.highest_bet = 0;
         self.winner = vec![];
-        self.current_player = Player::new("");
+        self.current_player = Player::empty();
         self.player_action = String::new();
         self.community_cards = Hand::new(5);
         self.discard_cards_prompted = false;
@@ -820,7 +821,7 @@ impl GameState {
     //****************************************************************
 
     pub async fn write_results_to_db(&self) {
-        let db_client = DbClient::new("mongodb://localhost:27017").await.unwrap();
+        let db_client = DbClient::new(&MONGO_URI).await.unwrap();
         let _result = db_client.insert(self).await;
 
         for player in self.players.clone() {
@@ -937,6 +938,8 @@ impl DbEntity for GameState {
     fn from_document(doc: &Document) -> Result<Self, String> {
         Ok(GameState {
             players: bson::from_bson(doc.get("players").cloned().unwrap_or(bson::Bson::Null))
+                .map_err(|e| e.to_string())?,
+            lobby: bson::from_bson(doc.get("players").cloned().unwrap_or(bson::Bson::Null))
                 .map_err(|e| e.to_string())?,
             deck: bson::from_bson(doc.get("deck").cloned().unwrap_or(bson::Bson::Null))
                 .map_err(|e| e.to_string())?,

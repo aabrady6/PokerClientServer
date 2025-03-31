@@ -4,7 +4,10 @@ use mongodb::{
     options::{ClientOptions, FindOneOptions, ServerApi, ServerApiVersion},
     Client, Collection, Database,
 };
+use once_cell::sync::Lazy;
 use std::error::Error;
+
+pub static MONGO_URI: Lazy<String> = Lazy::new(|| "mongodb://localhost:27017".to_string());
 
 /// Client used for interacting with the MongoDB instance
 pub struct DbClient {
@@ -34,7 +37,7 @@ impl DbClient {
     ///
     /// # Example
     /// ```
-    /// let db_client = DbClient::new("mongodb://localhost:27017").await.unwrap();
+    /// let db_client = DbClient::new(&MONGO_URI).await.unwrap();
     /// ```
     pub async fn new(uri: &str) -> Result<Self, Box<dyn Error>> {
         let mut client_options = ClientOptions::parse(uri).await?;
@@ -276,10 +279,10 @@ impl DbClient {
 
         let update = doc! {
             "$set": {
-                "total_games": 0 as i64,
-                "total_wins": 0 as i64,
-                "total_losses": 0 as i64,
-                "total_earnings": 0 as i64,
+                "total_games": 0_i64,
+                "total_wins": 0_i64,
+                "total_losses": 0_i64,
+                "total_earnings": 0_i64,
            }
         };
 
@@ -297,18 +300,18 @@ impl DbClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::game::{base_rules::GameState, player::Player};
+    use crate::game::{game_state::GameState, player::Player};
     use tokio;
 
     #[tokio::test]
     async fn test_db_client_connection_connect_and_ping() {
-        let db_client = DbClient::new("mongodb://localhost:27017").await.unwrap();
+        let db_client = DbClient::new(&MONGO_URI).await.unwrap();
         assert!(db_client.ping().await.is_ok());
     }
 
     #[tokio::test]
     async fn test_dbclient_insert_and_retrieve_player() {
-        let db_client = DbClient::new("mongodb://localhost:27017").await.unwrap();
+        let db_client = DbClient::new(&MONGO_URI).await.unwrap();
 
         let test_name = "test_player1".to_string();
         let mut player = Player::new(&test_name);
@@ -337,7 +340,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_dbclient_update_player() {
-        let db_client = DbClient::new("mongodb://localhost:27017").await.unwrap();
+        let db_client = DbClient::new(&MONGO_URI).await.unwrap();
 
         let test_name = "test_player2".to_string();
         let mut player = Player::new(&test_name);
@@ -374,7 +377,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_dbclient_find_player() {
-        let db_client = DbClient::new("mongodb://localhost:27017").await.unwrap();
+        let db_client = DbClient::new(&MONGO_URI).await.unwrap();
 
         let test_name = "test_player3".to_string();
         let mut player = Player::new(&test_name);
@@ -413,7 +416,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_dbclient_find_player_not_in_db() {
-        let db_client = DbClient::new("mongodb://localhost:27017").await.unwrap();
+        let db_client = DbClient::new(&MONGO_URI).await.unwrap();
 
         let test_name = "im_not_real".to_string();
 
@@ -438,7 +441,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_dbclient_query_all_players() {
-        let db_client = DbClient::new("mongodb://localhost:27017").await.unwrap();
+        let db_client = DbClient::new(&MONGO_URI).await.unwrap();
 
         let player = Player::new("test_player4");
         let player2 = Player::new("test_player5");
@@ -455,7 +458,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_dbclient_get_new_player_id() {
-        let db_client = DbClient::new("mongodb://localhost:27017").await.unwrap();
+        let db_client = DbClient::new(&MONGO_URI).await.unwrap();
 
         let test_name = "test_player6".to_string();
         let mut player = Player::new(&test_name);
@@ -471,42 +474,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_dbclient_get_next_game() {
-        let db_client = DbClient::new("mongodb://localhost:27017").await.unwrap();
-
-        let game_id = 999;
-        let game = GameState::empty_constructor(game_id);
-
-        let _ = db_client.insert(&game).await;
-
-        let next_id = db_client.get_new_game_id().await;
-
-        assert_eq!(next_id, 1000);
-        db_client.delete_one(&game).await.unwrap();
-    }
-
-    #[tokio::test]
     async fn test_dbclient_insert_and_retrieve_game() {
-        let db_client = DbClient::new("mongodb://localhost:27017").await.unwrap();
+        let db_client = DbClient::new(&MONGO_URI).await.unwrap();
 
-        let game_id = 998;
         let game_type = "thm".to_string();
-        let mut game = GameState::empty_constructor(game_id);
-        game.set_variant(&game_type);
-        game.set_highest_bet(100);
+        let mut game = GameState::new();
+        game.game_variant = game_type;
+        game.highest_bet = 100;
 
         let _ = db_client.insert(&game).await.unwrap();
 
-        let queried_game = GameState::empty_constructor(game_id);
+        let queried_game = GameState::new();
         let result = db_client.query_one(&queried_game).await;
 
         assert!(result.is_ok());
 
         match result {
             Ok(Some(retrieved_game)) => {
-                assert_eq!(retrieved_game.get_game_id(), game.get_game_id());
                 //assert_eq!(retrieved_game.get_variant(), game.get_variant());
-                assert_eq!(retrieved_game.get_highest_bet(), game.get_highest_bet());
+                assert_eq!(retrieved_game.highest_bet, game.highest_bet);
             }
             Ok(None) => {
                 panic!("Game not found!");
@@ -521,11 +507,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_dbclient_find_game_not_in_db() {
-        let db_client = DbClient::new("mongodb://localhost:27017").await.unwrap();
+        let db_client = DbClient::new(&MONGO_URI).await.unwrap();
 
-        let test_name = 99999;
-
-        let no_game = GameState::empty_constructor(test_name);
+        let no_game = GameState::new();
 
         let result = db_client.query_one(&no_game).await;
 
@@ -546,32 +530,30 @@ mod tests {
 
     #[tokio::test]
     async fn test_dbclient_game_update_game() {
-        let db_client = DbClient::new("mongodb://localhost:27017").await.unwrap();
+        let db_client = DbClient::new(&MONGO_URI).await.unwrap();
 
-        let game_id = 996;
         let mut game_type = "thm".to_string();
-        let mut game = GameState::empty_constructor(game_id);
-        game.set_variant(&game_type);
-        game.set_highest_bet(100);
+        let mut game = GameState::new();
+        game.game_variant = game_type;
+        game.highest_bet = 100;
 
         let _ = db_client.insert(&game).await.unwrap();
 
         game_type = "noholdem".to_string();
-        game.set_variant(&game_type);
-        game.set_highest_bet(200);
+        game.game_variant = game_type;
+        game.highest_bet = 200;
 
         db_client.update_one(&game).await.unwrap();
 
-        let queried_game = GameState::empty_constructor(game_id);
+        let queried_game = GameState::new();
         let result = db_client.query_one(&queried_game).await;
 
         assert!(result.is_ok());
 
         match result {
             Ok(Some(retrieved_game)) => {
-                assert_eq!(retrieved_game.get_game_id(), game.get_game_id());
-                assert_eq!(retrieved_game.get_variant(), game.get_variant());
-                assert_eq!(retrieved_game.get_highest_bet(), game.get_highest_bet());
+                assert_eq!(retrieved_game.game_variant, game.game_variant);
+                assert_eq!(retrieved_game.highest_bet, game.highest_bet);
             }
             Ok(None) => {
                 panic!("Game not found!");

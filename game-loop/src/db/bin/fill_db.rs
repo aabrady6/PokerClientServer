@@ -1,4 +1,4 @@
-use game_loop::db::dbclient::DbClient;
+use game_loop::db::dbclient::{DbClient, MONGO_URI};
 use game_loop::game::player::Player;
 use std::error::Error;
 
@@ -22,7 +22,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
     let wins = vec![5, 20, 800, 0, 200, 10, 200, 25, 100, 48];
     let earnings = vec![100, 200, 300, 400, 500, 600, 700, 800, 900, 0];
 
-    let uri = "mongodb://localhost:27017";
+    let uri = &MONGO_URI;
     let db_client = DbClient::new(uri).await?;
 
     for (index, name) in player_names.iter().enumerate() {
