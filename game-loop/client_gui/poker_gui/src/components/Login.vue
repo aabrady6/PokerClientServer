@@ -28,6 +28,9 @@
 <script setup>
 import { ref } from "vue";
 
+const NODE_SERVER_IP = import.meta.env.NODE_SERVER_IP || "localhost";
+const NODE_SERVER_PORT = import.meta.env.NODE_SERVER_PORT || "3000";
+
 const username = ref("");
 const password = ref("");
 const errorMessage = ref("");
@@ -47,7 +50,7 @@ async function login() {
 
   try {
     const response = await fetch(
-      `http://localhost:3000/login/${username.value}`,
+      `http://${NODE_SERVER_IP}:${NODE_SERVER_PORT}/login/${username.value}`,
       {
         method: "POST",
         headers: {
@@ -90,7 +93,7 @@ async function register() {
 
   try {
     const response = await fetch(
-      `http://localhost:3000/register/${username.value}`,
+      `http://${NODE_SERVER_IP}:${NODE_SERVER_PORT}/register/${username.value}`,
       {
         method: "POST",
         headers: {

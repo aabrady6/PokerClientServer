@@ -6,6 +6,9 @@
       :playerNameEntered="playerNameEntered"
       @loggedIn="handleLogin"
     />
+    <div v-else-if="!isInLobby">
+      Thanks for playing! Bye bye!
+    </div>
     <template v-else>
       <div class="action_info">
         {{ currentAction }}
@@ -32,6 +35,14 @@
       </div>
       <div v-if="winners.length" class="control_button" @click="clickEndMenu">
         END MENU
+      </div>
+      <div
+        v-if="isDealer"
+        class="control_button"
+        :class="{ unavailable: !canClickStartGame }"
+        @click="startGameClick"
+      >
+        START GAME
       </div>
       <div class="stats_menu">
         <span
@@ -65,11 +76,26 @@
           <Help />
         </div>
       </div>
+      <div
+        v-if="showEndMenu && !isDealerChoiceSpectator"
+        class="end_menu"
+      >
+        <div class="close_btn" @click="closeEndMenu" >X</div>
+        <EndRoundScreen
+          v-bind="endMenuData"
+          @click="submitEndRound"
+        />
+      </div>
+      <div
+        v-if="showJoinGameMenu"
+        class="join_game_menu"
+      >
+        <EndRoundScreen
+          v-bind="joinGameMenuData"
+          @click="submitJoinGame"
+        />
+      </div>
     </template>
-  </div>
-  <div v-if="showEndMenu" class="end_menu">
-    <div class="close_btn" @click="closeEndMenu">X</div>
-    <EndRoundScreen v-bind="endMenuData" @click="submitEndRound" />
   </div>
 </template>
 
@@ -82,18 +108,20 @@ import Stats from "./components/Stats.vue";
 import Help from "./components/Help.vue";
 import { computed, ref, watch } from "vue";
 
+const RUST_SERVER_IP = import.meta.env.VITE_RUST_SERVER_IP || "localhost";
+const RUST_SERVER_PORT = import.meta.env.VITE_RUST_SERVER_PORT || "8080";
+const NODE_SERVER_IP = import.meta.env.VITE_NODE_SERVER_ID || "localhost";
+const NODE_SERVER_PORT = import.meta.env.VITE_NODE_SERVER_PORT || "3000";
+
+console.log("RUST_SERVER_IP:", import.meta.env.VITE_RUST_SERVER_IP);
+console.log("RUST_SERVER_PORT:", import.meta.env.VITE_RUST_SERVER_PORT);
+
+
 const players = ref([]);
-const communityCards = ref([
-  ["AH", false],
-  ["2D", false],
-  ["TC", false],
-  ["QS", false],
-  ["7C", false],
-]);
+const communityCards = ref([]);
 const pot = ref(500);
 const highestBet = ref(0);
 const playerName = ref("");
-const playerAction = ref("");
 const currentPlayer = ref(null);
 const playerNameEntered = ref(false);
 const minRaise = ref(0);
@@ -101,17 +129,46 @@ const maxRaise = ref(0);
 const discardRound = ref(false);
 const demoMode = ref("");
 const winners = ref([]);
+const gameStarted = ref(false);
+const canClickStartGame = ref(false);
+const maxPlayers = ref(0);
 const showEndMenu = ref(false);
+const showJoinGameMenu = ref(false);
 const endMenuData = ref(null);
+const joinGameMenuData = ref(null);
 const seeStats = ref(false);
 const playerData = ref([]);
 const gamesData = ref([]);
 const singleGameData = ref([]);
 const seeHelp = ref(false);
-
-// must be set by the server
+const canMakeLobbyAction = ref(false);
+const dealerIdx = ref(0);
+const gameVariant = ref("");
+const spectators = ref([]);
+const dealerChoiceSpectators = ref([]);
+const lobby = ref([]);
 const selectCardsActive = ref(true);
 const currentAction = ref("Waiting to Start a Game...");
+
+const isSpectator = computed(() => (
+  spectators.value.length
+    ? !!spectators.value.find(p => p.player_name == playerName.value)
+    : false
+));
+const isDealerChoiceSpectator = computed(() => (
+  dealerChoiceSpectators.value.length
+    ? !!dealerChoiceSpectators.value.find(p => p.player_name == playerName.value)
+    : false
+));
+const isInLobby = computed(() => (
+  lobby.value.length
+    ? !!lobby.value.find(p => p.player_name == playerName.value)
+    : false
+));
+
+const isDealer = computed(() => (
+  players.value[dealerIdx.value]?.name === playerName.value
+));
 
 const winnersText = computed(() => {
   if (winners.value.length) {
@@ -130,7 +187,7 @@ const isCurrentPlayer = computed(() => {
   );
 });
 
-watch(isCurrentPlayer, (newValue) => {
+watch(() => isCurrentPlayer.value, (newValue) => {
   if (newValue) {
     console.log("✅ You ARE the current player.");
   } else {
@@ -149,6 +206,10 @@ const controls = computed(() => {
   const isCurrentPlayerTurn = isCurrentPlayer.value;
 
   if (!isCurrentPlayerTurn) {
+    return []; 
+  }
+
+  if (showEndMenu.value) {
     return [];
   }
 
@@ -300,19 +361,56 @@ const onControlsClick = (message) => {
   console.log("Sent action:", payload);
 };
 
+async function startGameClick() {
+  if (canClickStartGame.value) {
+    if (players.value.length >= 2 && players.value.length <= maxPlayers.value) {
+      try {
+          const response = await fetch(`http://${NODE_SERVER_IP}:${NODE_SERVER_PORT}/startgame`, { 
+              method: "GET",
+          });
+          
+          if (!response.ok) {
+              const error = await response.text();
+              throw new Error(error);
+          }
+          
+          const data = await response.json();
+          gameStarted.value = true;
+          canClickStartGame.value = false;
+          console.log("SETTING CANNOT CLICK START GAME!!!");
+      } catch (error) {
+          console.error("Start game error:", error);
+          alert(`Start game failed: ${error.message}`);
+      }
+    }
+  }
+}
+
 const clickEndMenu = () => {
-  const dealerName = players.value.find((player) => player.token === "D")
-    ? players.value.find((player) => player.token === "D").name
-    : "";
+  const headerTextStart = (
+    winnersText.value == ""
+      ? `Next table is a ${gameVariant.value} game!`
+      : winnersText.value
+  );
+  const winnersTextLocal = (
+    canMakeLobbyAction.value
+      ? headerTextStart
+      : headerTextStart + "\nWaiting for dealer action..."
+  );
+  const tableOptionsLocal = (
+    canMakeLobbyAction.value
+      ? ["Join table", "Spectate game", "Leave table"]
+      : []
+  );
   const data = {
-    headerText: winnersText.value,
-    tableOptions: ["Play again", "Leave table"],
-    dealerOptions: ["Five-Card Draw", "Seven-Card Stud", "Texas Hold 'Em"],
-    isDealer: dealerName == playerName.value,
-  };
-  showEndMenu.value = true;
-  endMenuData.value = data;
-};
+      headerText: winnersTextLocal,
+      tableOptions: tableOptionsLocal,
+      dealerOptions: ["Five-Card Draw", "Seven-Card Stud", "Texas Hold 'Em"],
+      isDealer: isDealer.value,
+    };
+    showEndMenu.value = true;
+    endMenuData.value = data;
+}
 
 async function clickStatsMenu(message) {
   if (seeStats.value) {
@@ -324,7 +422,7 @@ async function clickStatsMenu(message) {
 
     try {
       const response = await fetch(
-        `http://localhost:3000/stats?type=${payload.type}&stats_menu_type=${payload.stats_menu_type}&selected_option=${payload.selected_option}`,
+        `http://${NODE_SERVER_IP}:${NODE_SERVER_PORT}/stats?type=${payload.type}&stats_menu_type=${payload.stats_menu_type}&selected_option=${payload.selected_option}`,
         {
           method: "GET",
         }
@@ -400,17 +498,29 @@ const closeHelpMenu = () => {
 
 const submitEndRound = (message) => {
   const payload = {
-    type: "EndRound",
-    ...message,
-  };
+        type: "EndRound",
+        player_name: playerName.value,
+        ...message,
+    };
   socket.send(JSON.stringify(payload));
   console.log("Send end option:", payload);
   showEndMenu.value = false;
   winners.value = [];
-};
+}
+
+const submitJoinGame = (message) => {
+  const payload = {
+        type: "EndRound",
+        player_name: playerName.value,
+        ...message,
+    };
+  socket.send(JSON.stringify(payload));
+  console.log("Send join game option:", payload);
+  showJoinGameMenu.value = false;
+}
 
 // Set up WebSocket connection
-const socket = new WebSocket(`ws://localhost:8080/ws/`);
+const socket = new WebSocket(`ws://${RUST_SERVER_IP}:${RUST_SERVER_PORT}/ws/`);
 socket.onerror = (error) => console.error("WebSocket error:", error);
 socket.onclose = () => console.log("WebSocket connection closed");
 // Add to WebSocket open handler
@@ -422,77 +532,147 @@ socket.onopen = () => {
 
 // Modify message handler for better debugging
 socket.onmessage = (event) => {
-  try {
-    const data = JSON.parse(event.data);
-    console.log("Received game state:", data);
+    try {
+        const data = JSON.parse(event.data);
+        console.log("Received game state:", data);
+        
+        // Update community cards
+        if (data.community_cards?.cards) {
+          communityCards.value = data.community_cards.cards.map((card) => [
+            formatCard(card),
+            false,
+          ]);
+        }
 
-    // Update community cards
-    if (data.community_cards?.cards) {
-      communityCards.value = data.community_cards.cards.map((card) => [
-        formatCard(card),
-        false,
-      ]);
-    }
+        if (data.lobby) {
+          lobby.value = data.lobby;
+          if (data.lobby.length == 0) {
+            resetClientState();
+            return;
+          }
+        }
 
-    // Update players
-    if (data.players) {
-      players.value = data.players.map((player) => ({
-        name: player.player_name,
-        totalCash: player.player_money,
-        betCash: player.player_choices?.PlacedInPot?.PlacedInPot || 0,
-        faceUpCards: player.player_hand.cards
-          .filter((card) => card.face_up)
-          .map((card) => [formatCard(card), false]),
-        faceDownCards:
-          player.player_name === playerName.value
-            ? player.player_hand.cards
-                .filter((card) => !card.face_up)
-                .map((card) => [formatCard(card), false])
-            : player.player_hand.cards
-                .filter((card) => !card.face_up)
-                .map(() => ["", false]),
-        lastMove: player.last_move,
-        playerAction: player.player_action,
-        token: player.token,
-      }));
-    }
+        if (data.dealer || (data.dealer == 0)) {
+          console.log("Updating dealer index to: ", data.dealer);
+          dealerIdx.value = data.dealer;
+        }
+       
+        // Update players
+        if (data.players) {
+            if (data.players.length >= 2 && data.players.length <= data.max_players && !gameStarted.value && !data.winner.length) {
+              console.log("~~~~~~~~~~~~~~~~~~~~~~~~");
+              console.log("CAN CLICK START GAME!!!");
+              console.log("players length: ", data.players.length);
+              console.log("max players: ", data.max_players);
+              console.log("winners length: ", data.winner.length);
+              console.log("~~~~~~~~~~~~~~~~~~~~~~~~");
+              canClickStartGame.value = true;
+            } else {
+              console.log("CANNOT CLICK START GAME!!!");
+              canClickStartGame.value = false;
+            }
+            
+            players.value = data.players.map(player => {
+              return ({
+                name: player.player_name,
+                totalCash: player.player_money,
+                betCash: player.player_choices?.PlacedInPot?.PlacedInPot || 0,
+                faceUpCards: player.player_hand.cards.filter(card => card.face_up).map(card => [formatCard(card), false]),
+                faceDownCards: player.player_name === playerName.value || isSpectator.value
+                  ? player.player_hand.cards.filter(card => !card.face_up).map(card => [formatCard(card), false]) 
+                  : player.player_hand.cards.filter(card => !card.face_up).map(() => ["", false]),
+                lastMove: player.last_move,
+                playerAction: player.player_action,
+                token: player.token,
+            })
+          });
+        }
 
-    if (data.pot) {
-      pot.value = data.pot;
-    }
+        if (data.game_variant) {
+          gameVariant.value = data.game_variant;
+        }
 
-    if (data.winner) {
-      if (data.winner.length) {
-        winners.value = data.winner.map((w) => w[0].player_name);
-        showEndMenu.value = true;
-        clickEndMenu();
-      } else {
-        winners.value = [];
-      }
-    }
+        if (data.pot) {
+          pot.value = data.pot;
+        }
 
-    if (data.current_action_string) {
-      currentAction.value = data.current_action_string;
-    }
+        if (data.max_players) {
+          maxPlayers.value = data.max_players;
+        }
 
-    highestBet.value = data.highest_bet ?? 0;
+        if (data.players && data.spectators && data.dealer_choice_spectators && data.lobby) {
+          spectators.value = data.spectators;
+          dealerChoiceSpectators.value = data.dealer_choice_spectators;
+          if (
+            (!data.players.find(p => p.player_name == playerName.value) &&
+            !data.spectators.find(p => p.player_name == playerName.value) &&
+            data.lobby.find(p => p.player_name == playerName.value)) ||
+            isDealer.value
+          ) {
+            canMakeLobbyAction.value = true;
+          } else {
+            canMakeLobbyAction.value = false;
+          }
+          // this is the first player - show them the dealer options
+          if (data.players.length == 0) {
+            const local_data = {
+              headerText: "Welcome! You are the first one here! What would you like to do?",
+              tableOptions: ["Join table", "Spectate game", "Leave table"],
+              dealerOptions: ["Five-Card Draw", "Seven-Card Stud", "Texas Hold 'Em"],
+              isDealer: true,
+            };
+            joinGameMenuData.value = local_data;
+          } else { // this is not the first player - show them generic options
+            const local_data = {
+              headerText: `Welcome! Next table is a ${gameVariant.value} game! What would you like to do?`,
+              tableOptions: ["Join table", "Spectate game", "Leave table"],
+              dealerOptions: [],
+              isDealer: false,
+            };
+            joinGameMenuData.value = local_data;
+          }
+        }
 
-    if (data.raise_min_max) {
-      minRaise.value = data.raise_min_max[0];
-      maxRaise.value = data.raise_min_max[1];
-    }
+        if (data.winner) {
+          if (data.winner.length) {
+            winners.value = data.winner.map(w => w[0].player_name);
+            if (!isDealerChoiceSpectator.value) {
+              showEndMenu.value = true;
+            }
+            gameStarted.value = false;
+            if (showEndMenu.value) {
+              clickEndMenu();
+            }
+          } else {
+            winners.value = [];
+            if (showEndMenu.value) {
+              clickEndMenu();
+            }
+          }
+        }
+        
+        if (data.current_action_string) {
+          currentAction.value = data.current_action_string;
+        }
 
-    if (data.current_player) {
-      currentPlayer.value = data.current_player;
-    }
+        highestBet.value = data.highest_bet ?? 0;
 
-    if (data.discard_cards_prompted !== undefined) {
-      discardRound.value = data.discard_cards_prompted;
-    }
+        if (data.raise_min_max) {
+          minRaise.value = data.raise_min_max[0];
+          maxRaise.value = data.raise_min_max[1];
+        }
 
-    if (data.demo_mode !== undefined) {
-      demoMode.value = data.demo_mode;
-    }
+        if (data.current_player) {
+          currentPlayer.value = data.current_player;
+        }
+
+        if (data.discard_cards_prompted !== undefined) {
+          discardRound.value = data.discard_cards_prompted;
+        }
+
+        if (data.demo_mode !== undefined) {
+          demoMode.value = data.demo_mode;
+        }
   } catch (e) {
     console.error("WebSocket parse error:", e);
   }
@@ -501,7 +681,45 @@ socket.onmessage = (event) => {
 const handleLogin = (data) => {
   playerName.value = data.username;
   playerNameEntered.value = true;
+  showJoinGameMenu.value = true;
 };
+
+const resetClientState = () => {
+  console.log("RESETTING CLIENT STATE");
+  players.value = [];
+  communityCards.value = [];
+  pot.value = 500;
+  highestBet.value = 0;
+  playerName.value = "";
+  currentPlayer.value = null;
+  playerNameEntered.value = false;
+  minRaise.value = 0;
+  maxRaise.value = 0;
+  discardRound.value = false;
+  demoMode.value = "";
+  winners.value = [];
+  gameStarted.value = false;
+  canClickStartGame.value = false;
+  maxPlayers.value = 0;
+  showEndMenu.value = false;
+  showJoinGameMenu.value = false;
+  endMenuData.value = null;
+  joinGameMenuData.value = null;
+  seeStats.value = false;
+  playerData.value = [];
+  gamesData.value = [];
+  singleGameData.value = [];
+  seeHelp.value = false;
+  canMakeLobbyAction.value = false;
+  dealerIdx.value = 0;
+  gameVariant.value = "";
+  spectators.value = [];
+  dealerChoiceSpectators.value = [];
+  lobby.value = [];
+  selectCardsActive.value = true;
+  currentAction.value = "Waiting to Start a Game...";
+};
+
 </script>
 
 <style scoped lang="postcss">
@@ -515,7 +733,7 @@ const handleLogin = (data) => {
   }
 
   .action_info {
-    @apply text-5xl font-bold;
+    @apply text-5xl font-bold max-w-[80%];
   }
 
   .controls {
@@ -523,7 +741,7 @@ const handleLogin = (data) => {
   }
 
   .stats_menu {
-    @apply absolute right-8 top-10 border border-black border-solid flex flex-row justify-center items-center bg-gray-300 w-fit overflow-y-auto overflow-x-hidden;
+    @apply absolute right-8 top-10 border border-black border-solid flex flex-row justify-center items-start bg-gray-300 w-fit overflow-y-auto overflow-x-hidden z-10 max-h-[400px];
 
     .stats_menu_open {
       @apply flex flex-col justify-center items-center;
@@ -531,7 +749,7 @@ const handleLogin = (data) => {
   }
 
   .help_menu {
-    @apply absolute left-8 top-10 border border-black border-solid flex flex-row justify-center items-center bg-gray-300 w-fit overflow-y-auto overflow-x-hidden;
+    @apply absolute left-8 top-10 border border-black border-solid flex flex-row justify-center items-start bg-gray-300 w-fit overflow-y-auto overflow-x-hidden z-10 max-h-[400px];
     .help_menu_open {
       @apply flex flex-col justify-center items-center;
     }
@@ -562,6 +780,13 @@ const handleLogin = (data) => {
   -ms-transform: translate(-50%, -50%);
   transform: translate(-50%, -50%);
 }
+
+.join_game_menu {
+  @apply absolute left-1/2 top-1/2 bg-white border-2 border-solid border-black drop-shadow-md;
+  -ms-transform: translate(-50%, -50%);
+  transform: translate(-50%, -50%);
+}
+
 .close_btn {
   @apply rounded-md border border-solid border-black w-fit justify-self-end self-end p-2 m-2 cursor-pointer bg-white select-none;
 }

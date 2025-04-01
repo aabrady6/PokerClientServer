@@ -38,6 +38,8 @@ pub struct GameState {
     pub player_action: String,
     pub players: Vec<Player>,
     pub lobby: Vec<Player>,
+    pub spectators: Vec<Player>,
+    pub dealer_choice_spectators: Vec<Player>,
     pub winner: Vec<(Player, ScoredHand)>,
     pub community_cards: Hand,
     pub pot: u32,
@@ -64,6 +66,8 @@ impl Clone for GameState {
             player_action: self.player_action.clone(),
             players: self.players.clone(),
             lobby: self.lobby.clone(),
+            spectators: self.spectators.clone(),
+            dealer_choice_spectators: self.dealer_choice_spectators.clone(),
             winner: self.winner.clone(),
             community_cards: self.community_cards.clone(),
             pot: self.pot,
@@ -81,6 +85,8 @@ impl Default for GameState {
         GameState {
             players: Vec::new(),
             lobby: Vec::new(),
+            spectators: Vec::new(),
+            dealer_choice_spectators: Vec::new(),
             deck: Deck::new(),
             game_variant: "".to_string(),
             game_id: 0,
@@ -113,6 +119,8 @@ impl GameState {
         GameState {
             players: Vec::new(),
             lobby: Vec::new(),
+            spectators: Vec::new(),
+            dealer_choice_spectators: Vec::new(),
             deck: Deck::new(),
             game_variant: "".to_string(),
             game_id: id,
@@ -133,6 +141,16 @@ impl GameState {
             raise_min_max: (0, 0),
             demo_mode: "inactive".to_string(),
         }
+    }
+
+    pub fn game_state_retain_lobby_info(&mut self) {
+        let mut game_state = GameState::new();
+        game_state.players = self.players.clone();
+        game_state.lobby = self.lobby.clone();
+        game_state.spectators = self.spectators.clone();
+        game_state.winner = self.winner.clone();
+        game_state.dealer = self.dealer;
+        *self = game_state;
     }
 
     //****************************************************************
@@ -263,14 +281,29 @@ impl GameState {
         Ok(())
     }
 
+    pub fn insert_player_to_lobby(&mut self, player: &Player) -> Result<(), String> {
+        self.lobby.push(player.clone());
+        Ok(())
+    }
+
+    pub fn insert_player_to_spectators(&mut self, player: &Player) -> Result<(), String> {
+        self.spectators.push(player.clone());
+        Ok(())
+    }
+    pub fn insert_player_to_dealer_choice_spectators(&mut self, player: &Player) -> Result<(), String> {
+        self.dealer_choice_spectators.push(player.clone());
+        Ok(())
+    }
+
     //****************************************************************
     // DEALERS, BLINDS AND STARTING POSITIONS FUNCTIONS
     //****************************************************************
 
     pub async fn rotate_dealer(&mut self) {
+        println!("MOVING DEALER CHIP");
         self.players[self.dealer as usize].token = "".to_string();
         self.dealer = (self.dealer + 1) % self.players.len() as u32;
-        self.players[self.dealer as usize].token = "D".to_string();
+        // self.players[self.dealer as usize].token = "D".to_string();
     }
 
     pub async fn get_blinds_starting_player_index(&self) -> usize {
@@ -896,6 +929,9 @@ impl DbEntity for GameState {
     fn to_document(&self) -> Result<Document, String> {
         Ok(doc! {
             "players": bson::to_bson(&self.players).map_err(|e| e.to_string())?,
+            "lobby": bson::to_bson(&self.lobby).map_err(|e| e.to_string())?,
+            "spectators": bson::to_bson(&self.spectators).map_err(|e| e.to_string())?,
+            "dealer_choice_spectators": bson::to_bson(&self.dealer_choice_spectators).map_err(|e| e.to_string())?,
             "deck": bson::to_bson(&self.deck).map_err(|e| e.to_string())?,
             "game_id": self.game_id as i64,
             "game_variant": self.game_variant.clone(),
@@ -939,7 +975,11 @@ impl DbEntity for GameState {
         Ok(GameState {
             players: bson::from_bson(doc.get("players").cloned().unwrap_or(bson::Bson::Null))
                 .map_err(|e| e.to_string())?,
-            lobby: bson::from_bson(doc.get("players").cloned().unwrap_or(bson::Bson::Null))
+            lobby: bson::from_bson(doc.get("lobby").cloned().unwrap_or(bson::Bson::Null))
+                .map_err(|e| e.to_string())?,
+            spectators: bson::from_bson(doc.get("spectators").cloned().unwrap_or(bson::Bson::Null))
+                .map_err(|e| e.to_string())?,
+            dealer_choice_spectators: bson::from_bson(doc.get("dealer_choice_spectators").cloned().unwrap_or(bson::Bson::Null))
                 .map_err(|e| e.to_string())?,
             deck: bson::from_bson(doc.get("deck").cloned().unwrap_or(bson::Bson::Null))
                 .map_err(|e| e.to_string())?,

@@ -123,7 +123,7 @@ const helpTexts = {
   <li>The remaining players hands create the best 5 card combination from the cards they own.</li>
   <li>The pot is payed out to the winner(s).</li>
   </ul>
-  <br> 7. End of Game:
+  <br> 9. End of Game:
   <ul>
   <li>The dealer button rotates, and the new dealer chooses the next game type.</li>
   <li>Players are given the option to play again or leave the table.</li>

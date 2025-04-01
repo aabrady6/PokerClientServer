@@ -14,7 +14,7 @@
             </div>
         </div>
         <ChooseGameType
-            v-if="isDealer && selectedTableOption === 'Play again'"
+            v-if="isDealer && selectedTableOption === tableOptions[0]"
             :dealerOptions="dealerOptions"
             @click="dealerOptionSelect"
         />
@@ -47,7 +47,7 @@ const selectedDealerOption = ref("");
 
 const tableOptionSelect = (option) => {
     selectedTableOption.value = option;
-    if (!props.isDealer || option === 'Leave table') {
+    if (!props.isDealer || option != props.tableOptions[0]) {
         canSubmit.value = true;
     } else {
         canSubmit.value = false;
@@ -95,7 +95,7 @@ const onClick = () => {
 <style scoped lang="postcss">
 @reference "tailwindcss";
 .end_round_container {
-    @apply flex flex-col p-4 gap-4 justify-center items-center;
+    @apply flex flex-col p-4 gap-4 justify-center items-center text-center;
 
     .header_text {
         @apply text-4xl;

@@ -217,6 +217,7 @@ impl DbClient {
         Ok(entities)
     }
 
+    #[allow(dead_code)]
     pub async fn get_new_player_id(&self) -> u32 {
         let collection: Collection<Document> = self.database.collection("players");
 
@@ -257,6 +258,7 @@ impl DbClient {
         }
     }
 
+    #[allow(dead_code)]
     pub async fn reset_game_stats(&self) -> Result<(), String> {
         let collection: Collection<Document> = self.database.collection("games");
 
@@ -272,6 +274,7 @@ impl DbClient {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub async fn reset_player_stats(&self) -> Result<(), String> {
         let collection: Collection<Document> = self.database.collection("players");
 

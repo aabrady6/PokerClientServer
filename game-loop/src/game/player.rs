@@ -495,6 +495,7 @@ impl Player {
     pub fn reset_choices(&mut self) {
         self.player_choices.clear();
         self.last_move.clear();
+        self.total_wagered_per_game = 0;
     }
 
     /// Prints the player's action choices for the current round.

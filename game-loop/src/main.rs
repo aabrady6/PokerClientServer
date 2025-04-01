@@ -1,6 +1,6 @@
 use actix_cors::Cors;
 use actix_web::{web, App, HttpServer};
-use game::server::{player_login, player_register, stats, websocket, Server};
+use game::server::{player_login, player_register, stats, websocket, startgame, Server};
 
 mod db;
 pub mod game;
@@ -32,7 +32,8 @@ async fn main() -> std::io::Result<()> {
             .service(player_register)
             .service(websocket)
             .service(stats)
-    })
+            .service(startgame)
+        })
     .bind("0.0.0.0:8080")?
     .run()
     .await

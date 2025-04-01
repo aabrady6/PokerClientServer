@@ -23,9 +23,7 @@ pub enum MessageType {
     EndRound {
         option: String,
         dealer_option: String,
-    },
-    GameSelection {
-        game_var: String,
+        player_name: String,
     },
     UserLogin {
         username: String,

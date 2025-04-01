@@ -8,6 +8,7 @@ use actix::clock::timeout;
 use actix::{Actor, Addr, AsyncContext, Handler, Message as ActMessage, Running, StreamHandler};
 use actix_web::{get, post, web, HttpRequest, HttpResponse, Responder};
 use actix_web_actors::ws::{self, Message, ProtocolError, WebsocketContext};
+use itertools::Itertools;
 use serde_json::{from_str, json, Map, Value};
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -56,7 +57,7 @@ impl Actor for WebSocketConnection {
 
     fn stopping(&mut self, _ctx: &mut Self::Context) -> Running {
         let mut sessions = self.sessions.lock().unwrap();
-        sessions.retain(|s| !s.connected());
+        sessions.retain(|s| s.connected());
         println!(
             "Rust: WebSocket connection stopping. Total sessions now: {}",
             sessions.len()
@@ -199,13 +200,48 @@ impl Server {
     // GAME TYPE FUNCTIONS
     //****************************************************************
 
-    pub async fn game_lobby(data: web::Data<Server>) {
+    pub async fn game_lobby(data: &web::Data<Server>) {
+        // reset game data when creating lobby at start or after round end
+        // otherwise, keep exact same game state
+        {
+            let mut game_lock = data.game_state.lock().await;
+            if game_lock.winner.len() > 0 {
+                // reset, only maintain lobby and players
+                println!("----------------------------");
+                println!("Retaining lobby info...");
+                println!("----------------------------");
+                game_lock.game_state_retain_lobby_info();
+            }
+        }
         {
             let mut rx_lock = data.rx.lock().await;
-            Self::wait_for_game_action(&mut rx_lock).await;
+            match Self::wait_for_game_action(&mut rx_lock).await {
+                Some(game_action) => match game_action {
+                    MessageType::EndRound {
+                        option,
+                        dealer_option,
+                        player_name,
+                    } => {
+                        println!(
+                            "Received GameAction: Option: {}, DealerOption: {}, PlayerName: {}",
+                            option, dealer_option, player_name
+                        );
+                        Server::handle_join_game_message(&data, option, dealer_option, player_name)
+                            .await;
+                    }
+                    _ => {
+                        println!("Received an unexpected message type.");
+                    }
+                },
+                None => {
+                    println!("No GameAction received in time.");
+                }
+            }
         }
+        Server::broadcast_update(data).await;
     }
 
+    #[allow(unused_assignments)]
     pub async fn five_card_game(data: web::Data<Server>) {
         {
             let mut game_lock = data.game_state.lock().await;
@@ -266,13 +302,30 @@ impl Server {
             }
             game_lock.pay_winners().await;
             game_lock.write_results_to_db().await;
+            game_lock.rotate_dealer().await;
         }
 
         Server::broadcast_update(&data).await;
-
-        // write to db
+        let mut num_players_in_lobby = 0;
+        {
+            let game_lock = data.game_state.lock().await;
+            num_players_in_lobby = game_lock.lobby.len();
+        }
+        println!(
+            "{} players still in the lobby to talk to.",
+            num_players_in_lobby
+        );
+        // make sure to create the lobby for all players
+        for _ in 0..num_players_in_lobby {
+            let server_data_clone = data.clone();
+            tokio::spawn(async move {
+                Server::game_lobby(&server_data_clone).await;
+            });
+        }
+        println!("end of five card draw");
     }
 
+    #[allow(unused_assignments)]
     pub async fn seven_card_game(data: web::Data<Server>) {
         {
             let mut game_lock = data.game_state.lock().await;
@@ -380,13 +433,31 @@ impl Server {
             }
 
             game_lock.pay_winners().await;
+            game_lock.write_results_to_db().await;
+            game_lock.rotate_dealer().await;
         }
 
         Server::broadcast_update(&data).await;
-
-        // db write
+        let mut num_players_in_lobby = 0;
+        {
+            let game_lock = data.game_state.lock().await;
+            num_players_in_lobby = game_lock.lobby.len();
+        }
+        println!(
+            "{} players still in the lobby to talk to.",
+            num_players_in_lobby
+        );
+        // make sure to create the lobby for all players
+        for _ in 0..num_players_in_lobby {
+            let server_data_clone = data.clone();
+            tokio::spawn(async move {
+                Server::game_lobby(&server_data_clone).await;
+            });
+        }
+        println!("end of seven card stud");
     }
 
+    #[allow(unused_assignments)]
     pub async fn texas_card_game(data: web::Data<Server>) {
         {
             let mut game_lock = data.game_state.lock().await;
@@ -478,11 +549,28 @@ impl Server {
                 }
             }
             game_lock.pay_winners().await;
+            game_lock.write_results_to_db().await;
+            game_lock.rotate_dealer().await;
         }
 
         Server::broadcast_update(&data).await;
-
-        // db write
+        let mut num_players_in_lobby = 0;
+        {
+            let game_lock = data.game_state.lock().await;
+            num_players_in_lobby = game_lock.lobby.len();
+        }
+        println!(
+            "{} players still in the lobby to talk to.",
+            num_players_in_lobby
+        );
+        // make sure to create the lobby for all players
+        for _ in 0..num_players_in_lobby {
+            let server_data_clone = data.clone();
+            tokio::spawn(async move {
+                Server::game_lobby(&server_data_clone).await;
+            });
+        }
+        println!("end of texas");
     }
 
     //****************************************************************
@@ -794,15 +882,13 @@ impl Server {
     //****************************************************************
 
     pub async fn wait_for_game_action(rx: &mut Receiver<String>) -> Option<MessageType> {
-        let timeout_duration = Duration::from_secs(90);
-
         loop {
-            match timeout(timeout_duration, rx.recv()).await {
-                Ok(Some(msg)) => {
+            match rx.recv().await {
+                Some(msg) => {
                     //println!("Received WebSocket message: {}", msg);
 
                     match from_str::<MessageType>(&msg) {
-                        Ok(MessageType::GameSelection { .. }) => {
+                        Ok(MessageType::EndRound { .. }) => {
                             println!("Valid Game Variety Found!");
                             return Some(from_str(&msg).unwrap());
                         }
@@ -816,12 +902,8 @@ impl Server {
                         }
                     }
                 }
-                Ok(None) => {
+                None => {
                     println!("MPSC WebSocket channel closed.");
-                    return None;
-                }
-                Err(_) => {
-                    println!("Timeout: No PlayerAction received in 30 seconds.");
                     return None;
                 }
             }
@@ -1144,6 +1226,147 @@ impl Server {
         }
         Value::Null
     }
+
+    pub async fn handle_join_game_message(
+        data: &web::Data<Server>,
+        option: String,
+        dealer_option: String,
+        player_name: String,
+    ) {
+        match option.as_str() {
+            "Join table" => {
+                let mut game_lock = data.game_state.lock().await;
+
+                if game_lock
+                    .players
+                    .iter()
+                    .all(|p| p.get_name() != &player_name)
+                {
+                    let mut new_player = Player::new(&player_name);
+                    let uri = &MONGO_URI;
+                    let db_client = DbClient::new(uri).await.unwrap();
+                    let result = db_client.query_one::<Player>(&new_player).await;
+                    match result {
+                        Ok(Some(p)) => {
+                            new_player = p;
+                        }
+                        Ok(None) => {
+                            println!("\nPlayer not found in db.");
+                        }
+                        Err(e) => {
+                            println!("Error retrieving player: {}", e);
+                        }
+                    };
+                    new_player.token = "".to_string();
+
+                    match game_lock.insert_player(&new_player) {
+                        Ok(()) => println!("Player added successfully!"),
+                        Err(e) => println!("Error inserting player: {}", e),
+                    };
+                } else {
+                    let this_player_idx = game_lock
+                        .players
+                        .iter()
+                        .find_position(|p| p.get_name() == &player_name);
+                    match this_player_idx {
+                        Some((idx, _)) => {
+                            // if you are the dealer, and this is NOT a brand new lobby
+                            game_lock.players[idx].token = "".to_string();
+                            if dealer_option != "" {
+                                game_lock.winner.clear();
+                                // clear all players but yourself
+                                game_lock
+                                    .players
+                                    .retain(|player| player.player_name == player_name);
+                                game_lock
+                                    .spectators
+                                    .retain(|player| player.player_name == player_name);
+                                // set dealer index to be 0, since you are now in the first place as the dealer
+                                game_lock.dealer = 0;
+                            }
+                        }
+                        None => println!("Error: player {} is missing!!", player_name),
+                    };
+                }
+
+                match dealer_option.as_str() {
+                    "Five-Card Draw" => game_lock.game_variant = "5 Card Draw".to_string(),
+                    "Seven-Card Stud" => game_lock.game_variant = "7 Card Stud".to_string(),
+                    "Texas Hold 'Em" => game_lock.game_variant = "Texas Hold'em".to_string(),
+                    _ => println!("Invalid/no game variant chosen."),
+                };
+                println!("successfully joined table");
+            }
+            "Spectate game" => {
+                println!("Player {} chose to spectate game.", player_name);
+                let mut game_lock = data.game_state.lock().await;
+                game_lock
+                    .players
+                    .retain(|player| player.player_name != player_name);
+                if game_lock
+                    .dealer_choice_spectators
+                    .iter()
+                    .all(|p| p.get_name() != &player_name)
+                {
+                    let new_player = Player::new(&player_name);
+
+                    match game_lock.insert_player_to_dealer_choice_spectators(&new_player) {
+                        Ok(()) => println!("Dealer choice spectator added successfully!"),
+                        Err(e) => println!("Error inserting player: {}", e),
+                    };
+                }
+                if game_lock
+                    .spectators
+                    .iter()
+                    .all(|p| p.get_name() != &player_name)
+                {
+                    let new_player = Player::new(&player_name);
+
+                    match game_lock.insert_player_to_spectators(&new_player) {
+                        Ok(()) => println!("Spectator added successfully!"),
+                        Err(e) => println!("Error inserting player: {}", e),
+                    };
+                }
+                // ensures there is a dealer
+                println!("Player length: {}, dealer index: {}", (game_lock.players.len() as u32), game_lock.dealer);
+                loop {
+                    if game_lock.dealer == 0 {
+                        break;
+                    }
+                    if game_lock.players.len() <= usize::try_from(game_lock.dealer).unwrap() {
+                        game_lock.dealer-=1;
+                    } else {
+                        break;
+                    }
+                }
+            }
+            "Leave table" => {
+                println!("Player {} chose to leave the table.", player_name);
+                let mut game_lock = data.game_state.lock().await;
+                game_lock.players.retain(|player| player.player_name != player_name);
+                game_lock.spectators.retain(|player| player.player_name != player_name);
+                game_lock.lobby.retain(|player| player.player_name != player_name);
+                // check if lobby is empty, and if so, reset entire game state
+                // ensures there is a dealer
+                println!("Player length: {}, dealer index: {}", (game_lock.players.len() as u32), game_lock.dealer);
+                loop {
+                    if game_lock.dealer == 0 {
+                        break;
+                    }
+                    if game_lock.players.len() <= usize::try_from(game_lock.dealer).unwrap() {
+                        game_lock.dealer-=1;
+                    } else {
+                        break;
+                    }
+                }
+                if game_lock.lobby.len() == 0 {
+                    let new_game_state = GameState::new();
+                    *game_lock = new_game_state;
+                }
+            }
+            _ => println!("Unknown join game message: {option} {dealer_option} {player_name}"),
+        };
+    }
 }
 
 #[get("/ws/")]
@@ -1187,6 +1410,35 @@ async fn stats(req: HttpRequest) -> impl Responder {
             HttpResponse::Ok().json(response_json)
         }
     };
+}
+
+#[get("/startgame")]
+#[allow(unused_assignments)]
+async fn startgame(data: web::Data<Server>) -> impl Responder {
+    println!("Rust: Starting game");
+
+    let mut game_type = "".to_string();
+
+    {
+        let mut game_lock = data.game_state.lock().await;
+        game_type = game_lock.game_variant.clone();
+        // move all those who chose to spectate into the correct vector
+        game_lock.spectators = game_lock.dealer_choice_spectators.clone();
+        game_lock.dealer_choice_spectators.clear();
+    }
+
+    println!("Starting game now!!");
+    let server_data_clone = data.clone();
+
+    tokio::spawn(async move {
+        match game_type.as_str() {
+            "5 Card Draw" => Server::five_card_game(server_data_clone).await,
+            "7 Card Stud" => Server::seven_card_game(server_data_clone).await,
+            "Texas Hold'em" => Server::texas_card_game(server_data_clone).await,
+            _ => println!("Cannot start game of unknown type"),
+        }
+    });
+    HttpResponse::Ok().json("{}")
 }
 
 #[post("/login/{player_name}")]
@@ -1239,13 +1491,20 @@ async fn player_login(
                     "Login Successful: {:?}. Adding to Lobby",
                     player.player_name
                 );
+                Server::broadcast_update(&data).await;
+
+                let server_data_clone = data.clone();
+
+                tokio::spawn(async move {
+                    Server::game_lobby(&server_data_clone).await;
+                });
                 HttpResponse::Ok().json(json!({
                     "message": "Login successful",
                     "username": player.player_name
                 }))
             }
             Err(error_message) => {
-                println!("Login Unsuccessful");
+                println!("Login Unsuccessful: {error_message}");
                 HttpResponse::Unauthorized().json(json!({
                     "error": error_message
                 }))
@@ -1314,6 +1573,13 @@ async fn player_register(
                             let mut game_lock = data.game_state.lock().await;
                             game_lock.lobby.push(p);
                         }
+                        Server::broadcast_update(&data).await;
+
+                        let server_data_clone = data.clone();
+
+                        tokio::spawn(async move {
+                            Server::game_lobby(&server_data_clone).await;
+                        });
                         HttpResponse::Ok().json(json!({
                             "message": "Login successful",
                             "username": inserted_player.player_name
