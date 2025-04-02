@@ -1,3 +1,7 @@
+//! # WebSocket Connection Handling
+//!
+//! This module defines the WebSocket connection actor and its associated logic for handling client connections, broadcasting messages to all clients, and managing active sessions.
+
 use crate::db::auth::login_player;
 use crate::db::dbclient::{DbClient, MONGO_URI};
 use crate::game::client_messages::MessageType;
@@ -16,33 +20,53 @@ use tokio::sync::mpsc::Receiver;
 use tokio::sync::{broadcast, mpsc, Mutex as tMutex};
 use tokio::time::Duration;
 
-// allows games to tell server to broadcast game state to all clients
+/// allows games to tell server to broadcast game state to all clients
 pub static BROADCAST_SENDER: OnceLock<broadcast::Sender<()>> = OnceLock::new();
 
-// Custom message for broadcasting updates.
+/// Message struct used to broadcast a message to all WebSocket clients.
 struct BroadcastMessage(String);
 
+/// The result type of the message,
 impl ActMessage for BroadcastMessage {
     type Result = ();
 }
 
+/// Handles `BroadcastMessage` by sending the provided message to the WebSocket client.
+///
+/// # Arguments
+///
+/// * `msg` - The `BroadcastMessage` containing the message to be sent to the client.
+/// * `ctx` - The WebSocket context for the actor, used to send the message to the client.
 impl Handler<BroadcastMessage> for WebSocketConnection {
     type Result = ();
 
+    /// Send the broadcast message as a message to the client.
     fn handle(&mut self, msg: BroadcastMessage, ctx: &mut Self::Context) {
         ctx.text(msg.0);
     }
 }
 
-// WebSocket actor to manage client connections.
+/// A WebSocket connection actor that manages a single client connection,
+/// handles broadcasting messages to all clients, and tracks active WebSocket sessions.
 pub struct WebSocketConnection {
+    /// A shared, thread-safe collection of active WebSocket sessions.
+    /// This is used to track all connected clients and broadcast messages to them.
     pub sessions: Arc<Mutex<HashSet<Addr<WebSocketConnection>>>>,
+    /// The sender for sending messages from this WebSocket connection.
     pub tx: mpsc::Sender<String>,
 }
 
 impl Actor for WebSocketConnection {
+    /// The type of context used by this actor. `ws::WebsocketContext<Self>`
+    /// is used for managing WebSocket-specific functionality.
     type Context = ws::WebsocketContext<Self>;
 
+    /// Called when the WebSocket connection is started.
+    /// It adds the connection address to the `sessions` set and prints the current number of active sessions.
+    ///
+    /// # Arguments
+    ///
+    /// * `ctx` - The context of the actor which provides access to the actor's address and other utilities.
     fn started(&mut self, ctx: &mut Self::Context) {
         let addr = ctx.address();
         {
@@ -55,6 +79,16 @@ impl Actor for WebSocketConnection {
         );
     }
 
+    /// Called when the WebSocket connection is stopping.
+    /// It removes the session from the `sessions` set if it is no longer connected.
+    ///
+    /// # Arguments
+    ///
+    /// * `_ctx` - The context of the actor, though it is not used here.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Running::Stop` to indicate the actor should stop.
     fn stopping(&mut self, _ctx: &mut Self::Context) -> Running {
         let mut sessions = self.sessions.lock().unwrap();
         sessions.retain(|s| s.connected());
@@ -66,7 +100,19 @@ impl Actor for WebSocketConnection {
     }
 }
 
+/// Implements the `StreamHandler` for handling incoming WebSocket messages.
+/// This is used to process incoming messages from clients over the WebSocket connection.
 impl StreamHandler<Result<Message, ProtocolError>> for WebSocketConnection {
+    /// Handles messages received from WebSocket clients.
+    ///
+    /// It supports handling text messages, ping requests, and connection closure events.
+    /// Text messages are forwarded to an MPSC (Multi-Producer, Single-Consumer) channel for further processing.
+    /// Ping messages are responded to with a pong, and close messages print the closure reason.
+    ///
+    /// # Arguments
+    ///
+    /// * `msg` - A result of `Message` which can either be a valid WebSocket message or an error.
+    /// * `ctx` - The WebSocket context, which is used to send responses like `pong` messages or handle connection closure.
     fn handle(&mut self, msg: Result<Message, ProtocolError>, ctx: &mut WebsocketContext<Self>) {
         match msg {
             Ok(Message::Text(text)) => {
@@ -94,8 +140,19 @@ impl StreamHandler<Result<Message, ProtocolError>> for WebSocketConnection {
         }
     }
 }
-/// Define a generic Server struct, which is parameterized by a type T that implements the PokerGame trait.
+
+/// `Server` struct manages the game state, sessions, message passing, and broadcasting.
 ///
+/// It is parameterized by a type `T` which implements the `PokerGame` trait. The `Server` struct holds the necessary data
+/// for managing active game sessions, broadcasting updates to clients, and sending/receiving messages using MPSC channels.
+///
+/// # Fields
+///
+/// * `game_state`: A `tMutex<GameState>` representing the current game state, protected by a mutex for thread safety.
+/// * `sessions`: A `Arc<Mutex<HashSet<Addr<WebSocketConnection>>>>` representing the set of active WebSocket sessions (clients).
+/// * `broadcast_sender`: A `broadcast::Sender<()>` used to broadcast messages to all clients.
+/// * `rx`: A `tMutex<mpsc::Receiver<String>>` for receiving messages from the MPSC channel.
+/// * `mpsc_tx`: A `mpsc::Sender<String>` for sending messages through the MPSC channel.
 pub struct Server {
     pub game_state: tMutex<GameState>,
     pub sessions: Arc<Mutex<HashSet<Addr<WebSocketConnection>>>>,
@@ -109,6 +166,32 @@ impl Server {
     // INITIALIZATION FUNCTIONS
     //****************************************************************
 
+    /// Creates a new instance of the `Server` struct and initializes all necessary components.
+    ///
+    /// This function initializes a new `Server` instance with:
+    /// - A `broadcast` channel (`broadcast::channel`) for broadcasting messages to all WebSocket clients.
+    /// - An MPSC (Multi-Producer, Single-Consumer) channel (`mpsc::channel`) for message passing between different parts of the server.
+    /// - A `game_state` initialized with a new `GameState` using a `tMutex` for thread safety.
+    /// - A `sessions` field that holds active WebSocket client sessions in a `Mutex` to ensure thread-safe access.
+    /// - The `broadcast_sender` field is set to the broadcast channel's sender to broadcast messages to clients.
+    /// - The receiver part of the MPSC channel (`mpsc_rx`) is stored in the `rx` field, while the sender part (`mpsc_tx`) is stored in `mpsc_tx`.
+    ///
+    /// The `BROADCAST_SENDER` global static is also set to the broadcast sender to allow other components to broadcast messages.
+    ///
+    /// # Returns
+    ///
+    /// Returns an `Arc<Self>`, a reference-counted smart pointer to the newly created `Server` instance, which ensures the server is shared safely across threads.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// let server = Server::new();
+    /// ```
+    ///
+    /// # Notes
+    ///
+    /// - The server initializes the necessary components for managing game state, sessions, and communication between components.
+    /// - The function is currently logging "Standard Poker initialize" to the console, which may be used for debugging or initialization tracking.
     pub fn new() -> Arc<Self> {
         println!("Standard Poker initalize");
         let (tx, _rx) = broadcast::channel(100); // Create a broadcast channel
@@ -136,7 +219,24 @@ impl Server {
     // BROADCAST FUNCTIONS
     //****************************************************************
 
-    /// Listener task to watch for broadcasts and trigger `broadcast_update`
+    /// Listens for broadcast messages and triggers an update to all connected clients when a broadcast is received.
+    ///
+    /// This asynchronous function subscribes to the broadcast channel and continuously listens for new broadcast messages.
+    /// When a broadcast is received, it triggers the `broadcast_update` function to send the latest game state to all connected WebSocket clients.
+    ///
+    /// The method runs an infinite loop and awaits messages on the broadcast channel. Upon receiving a message, it spawns a new asynchronous task to perform the broadcasting.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// let server = Server::new();
+    /// tokio::spawn(async move {
+    ///     server.listen_for_broadcasts().await;
+    /// });
+    /// ```
+    ///
+    /// # Notes
+    /// - This function runs indefinitely and is typically called at server startup to begin listening for broadcast messages.
     pub async fn listen_for_broadcasts(self: Arc<Self>) {
         let mut rx = self.broadcast_sender.subscribe();
 
@@ -160,6 +260,25 @@ impl Server {
         }
     }
 
+    /// Broadcasts the game state update to all connected clients.
+    ///
+    /// This function retrieves the current game state and serializes it into a JSON message, which is then sent to all connected WebSocket sessions.
+    /// Each session will receive the update as a message to update the client-side game state.
+    ///
+    /// # Parameters
+    /// - `data`: A reference-counted `Arc<Self>` pointing to the `Server` instance, which contains the game state and sessions.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// let server = Server::new();
+    /// tokio::spawn(async move {
+    ///     server.broadcast_update(&server).await;
+    /// });
+    /// ```
+    ///
+    /// # Notes
+    /// - This method serializes the `GameState` and sends it to all connected clients. If there's an error with locking the game state or serializing the state, an error message is printed.
     pub async fn broadcast_update(data: &Arc<Self>) {
         //println!("BROADCAST UPDATE CALLED");
         // 1. Get game state with async lock
@@ -200,6 +319,29 @@ impl Server {
     // GAME TYPE FUNCTIONS
     //****************************************************************
 
+    /// Handles the game lobby state, including resetting game data or retaining existing game state, and processes game actions.
+    ///
+    /// This function is responsible for managing the lobby and reacting to player actions in the game lobby.
+    /// It will reset game data (except for the lobby and players) if there was a round winner, or retain the existing game state otherwise.
+    /// It listens for a game action and processes it (e.g., ending a round), then broadcasts the updated game state to all connected players.
+    ///
+    /// # Parameters
+    /// - `data`: A shared reference to the `Server` instance wrapped in `web::Data`, providing access to game state and game actions.
+    ///
+    /// # Workflow:
+    /// - Resets the game data if a winner has been determined (except for the lobby and players).
+    /// - Waits for a game action (e.g., `EndRound`).
+    /// - Processes the received game action (e.g., handling a player's round-end action).
+    /// - Updates the game state and broadcasts it to all players.
+    ///
+    /// # Example
+    /// ```rust
+    /// let server = web::Data::new(Server::new());
+    /// server.game_lobby().await;
+    /// ```
+    ///
+    /// # Notes:
+    /// - If no game action is received in time, a message is logged indicating a timeout.
     pub async fn game_lobby(data: &web::Data<Server>) {
         // reset game data when creating lobby at start or after round end
         // otherwise, keep exact same game state
@@ -241,6 +383,28 @@ impl Server {
         Server::broadcast_update(data).await;
     }
 
+    /// Runs the logic for a Five Card Draw game round, including dealing, betting, discarding, and determining the winner.
+    ///
+    /// This function handles the flow of a Five Card Draw game, including dealing cards, conducting betting rounds, allowing discards, and determining the winner.
+    /// It orchestrates multiple rounds of the game, and after each round, it broadcasts the updated game state to all connected players.
+    ///
+    /// # Parameters
+    /// - `data`: A shared reference to the `Server` instance wrapped in `web::Data`, providing access to game state and player actions.
+    ///
+    /// # Workflow:
+    /// - Initializes a new round of the game by dealing cards, setting up the players, and starting the betting rounds.
+    /// - Players participate in a discard round, followed by another betting round.
+    /// - The game state is updated and broadcasted after each stage of the game (dealing, betting, discarding, etc.).
+    /// - The winner is determined, and the results are written to the database and broadcasted.
+    ///
+    /// # Example
+    /// ```rust
+    /// let server = web::Data::new(Server::new());
+    /// server.five_card_game().await;
+    /// ```
+    ///
+    /// # Notes:
+    /// - The `five_card_game` function assumes that all necessary game mechanics (such as dealing and betting logic) are implemented in the `GameState` structure.
     #[allow(unused_assignments)]
     pub async fn five_card_game(data: web::Data<Server>) {
         {
@@ -248,11 +412,6 @@ impl Server {
 
             game_lock.new_five_card_round().await;
             tokio::task::yield_now().await;
-
-            //TODO: REMOVE THIS, just have it here for testing purposes
-            for i in 0..game_lock.players.len() {
-                game_lock.players[i].player_id = i as u32;
-            }
         }
         tokio::task::yield_now().await;
 
@@ -325,6 +484,28 @@ impl Server {
         println!("end of five card draw");
     }
 
+    /// Runs the logic for a Seven Card Stud game round, including dealing, betting, and determining the winner.
+    ///
+    /// This function manages the full flow of a Seven Card Stud game, including the dealing of cards (face-up and face-down),
+    /// conducting multiple betting rounds, and determining the winner. It performs actions for each player and broadcasts the updated
+    /// game state after each significant step (betting, dealing, determining winners, etc.).
+    ///
+    /// # Parameters
+    /// - `data`: A shared reference to the `Server` instance wrapped in `web::Data`, providing access to the game state and actions.
+    ///
+    /// # Workflow:
+    /// - The function starts by dealing the cards, conducting betting rounds, and updating the game state.
+    /// - It proceeds with the game by dealing additional cards (face-up), updating the current player, and handling betting rounds.
+    /// - After all betting rounds and dealing of cards, the winner is determined, and the results are written to the database and broadcasted.
+    ///
+    /// # Example
+    /// ```rust
+    /// let server = web::Data::new(Server::new());
+    /// server.seven_card_game().await;
+    /// ```
+    ///
+    /// # Notes:
+    /// - The game progresses through multiple stages of betting and card dealing.
     #[allow(unused_assignments)]
     pub async fn seven_card_game(data: web::Data<Server>) {
         {
@@ -332,11 +513,6 @@ impl Server {
 
             game_lock.new_seven_card_round().await;
             tokio::task::yield_now().await;
-
-            //TODO: REMOVE THIS, just have it here for testing purposes
-            for i in 0..game_lock.players.len() {
-                game_lock.players[i].player_id = i as u32;
-            }
         }
         tokio::task::yield_now().await;
 
@@ -457,6 +633,28 @@ impl Server {
         println!("end of seven card stud");
     }
 
+    /// Runs the logic for a Texas Holdem game round, including dealing, betting, and determining the winner.
+    ///
+    /// This function manages the full flow of a Texas Holdem game, including the dealing of cards (face-down and community cards),
+    /// conducting multiple betting rounds, and determining the winner. It performs actions for each player and broadcasts the updated
+    /// game state after each significant step (betting, dealing, determining winners, etc.).
+    ///
+    /// # Parameters
+    /// - `data`: A shared reference to the `Server` instance wrapped in `web::Data`, providing access to the game state and actions.
+    ///
+    /// # Workflow:
+    /// - The function starts by dealing the cards, conducting betting rounds, and updating the game state.
+    /// - It proceeds with the game by dealing additional cards (community face-up), updating the current player, and handling betting rounds.
+    /// - After all betting rounds and dealing of cards, the winner is determined, and the results are written to the database and broadcasted.
+    ///
+    /// # Example
+    /// ```rust
+    /// let server = web::Data::new(Server::new());
+    /// server.texas_card_game().await;
+    /// ```
+    ///
+    /// # Notes:
+    /// - The game progresses through multiple stages of betting and card dealing.    
     #[allow(unused_assignments)]
     pub async fn texas_card_game(data: web::Data<Server>) {
         {
@@ -464,11 +662,6 @@ impl Server {
 
             game_lock.new_texas_holdem_round().await;
             tokio::task::yield_now().await;
-
-            //TODO: REMOVE THIS, just have it here for testing purposes
-            for i in 0..game_lock.players.len() {
-                game_lock.players[i].player_id = i as u32;
-            }
         }
         tokio::task::yield_now().await;
 
@@ -577,6 +770,33 @@ impl Server {
     // GAME SPECIFIC FUNCTIONS
     //****************************************************************
 
+    /// Handles a single betting round in the Texas Hold'em game.
+    ///
+    /// This function controls the entire process of a betting round in Texas Hold'em, including player actions (bet, fold, etc.), broadcasting game updates, and managing demo mode. It ensures that all players take their turns in order and progresses the game to the next stage once all players have acted or the round is complete.
+    ///
+    /// # Parameters
+    /// - `data`: A reference to the server data (`web::Data<Server>`), which contains the current game state, player data, and message handling for player actions.
+    ///
+    /// # Process Overview
+    /// 1. **Initial Setup**:  
+    ///    The function starts by checking if only one player remains in the game. If so, the round is marked as complete immediately. The function also prepares the game for a new betting round if it isn't the first round.
+    ///
+    /// 2. **Player Actions**:
+    ///    - If the demo mode is active, the function will handle demo mode actions.
+    ///    - The function enters a loop where it waits for each player to take their action (bet, fold, etc.).
+    ///    - The `broadcast_update` method is called regularly to inform all players of the current state of the game.
+    ///    
+    /// 3. **Betting Process**:
+    ///    - If the round is not complete, the function will continually check for player actions and update the current player's status.
+    ///    - Players who have already folded are skipped, and the current action is displayed to all players.
+    ///    - Player actions are processed, such as betting or folding, and the game state is updated accordingly.
+    ///
+    /// 4. **Demo Mode Handling**:
+    ///    - If demo mode is active, special handling is performed for player actions, and the round may exit early to simulate demo behavior.
+    ///    
+    /// 5. **End of Round**:
+    ///    - The round is marked as complete when all players have made their choices or when only one player remains.
+    ///    - The round ends after all actions have been processed, and the function moves to the next round or concludes the game.
     #[allow(clippy::comparison_chain)]
     #[allow(unused_assignments)]
     #[allow(unused_mut)]
@@ -748,6 +968,30 @@ impl Server {
         Server::broadcast_update(data).await;
     }
 
+    /// Handles a discard round in the Texas Hold'em game.
+    ///
+    /// This function is responsible for managing the discard phase of the game, where players can choose to discard one or more cards. It ensures that the game progresses through player actions, handles demo mode behavior, and broadcasts updates to all players. If only one player remains, the discard phase is skipped. The function also waits for and processes discard actions from players.
+    ///
+    /// # Parameters
+    /// - `data`: A reference to the server data (`web::Data<Server>`), which contains the current game state, player data, and message handling for player actions.
+    ///
+    /// # Process Overview
+    /// 1. **Initial Setup**:  
+    ///    The function checks the number of remaining players. If only one player is left, the discard phase ends immediately. It then proceeds by updating the current player’s action status to indicate that the player is currently discarding their cards.
+    ///
+    /// 2. **Player Actions**:
+    ///    - The function enters a loop where it waits for discard actions from each player. The action is either discarding a card or folding.
+    ///    - If demo mode is active, the discard phase will end immediately without processing player discard actions.
+    ///
+    /// 3. **Handling Discard Actions**:
+    ///    - For each player, the function waits for a discard action (which card to discard). It processes the discard action by calling the `handle_player_discard_message` method.
+    ///    - If no discard action is received in time, the current player is forced to fold.
+    ///
+    /// 4. **Broadcasting Updates**:
+    ///    - The game state is broadcasted to all players after each action or update, keeping everyone informed about the current state of the discard round.
+    ///
+    /// 5. **End of Round**:
+    ///    - After all players have taken their discard actions, or if demo mode is active, the discard round is concluded. The function then moves to the next stage of the game or continues based on the game rules.
     #[allow(unused_assignments)]
     pub async fn discard_round(data: &web::Data<Server>) {
         let remaining_players;
@@ -822,6 +1066,30 @@ impl Server {
         }
     }
 
+    /// Handles the betting logic during demo mode, including checking, calling, and folding.
+    ///
+    /// This function simulates the betting actions of players in demo mode. It processes players' choices (check, call, fold) based on their available money and current bet, then updates the game state accordingly. The function groups players into three categories: those who can check, call, or must fold, and handles each group sequentially. It updates the game state after each group action and proceeds to the next betting round.
+    ///
+    /// # Parameters
+    /// - `data`: A reference to the server data (`web::Data<Server>`) that contains the game state, including player data, available actions, and current bets.
+    ///
+    /// # Process Overview
+    /// 1. **Initialize Action Vectors**:  
+    ///    The function starts by initializing three vectors: `check_vec`, `call_vec`, and `fold_vec`, which represent players who will check, call, or fold, respectively. It determines the player's actions based on their current bet and available money relative to the highest bet in the round.
+    ///
+    /// 2. **Categorizing Players**:
+    ///    - **Check**: Players who have placed the highest bet and can check (no additional action) are added to `check_vec`.
+    ///    - **Call**: Players who can match the highest bet with their available money are added to `call_vec`.
+    ///    - **Fold**: Players who cannot afford to call the highest bet or have already folded are added to `fold_vec`.
+    ///
+    /// 3. **Executing Actions**:
+    ///    - The function then processes each vector in turn:
+    ///        - **Check**: Players in `check_vec` will check the round (no additional bet).
+    ///        - **Call**: Players in `call_vec` will call the round (match the highest bet).
+    ///        - **Fold**: Players in `fold_vec` will fold (exit the round).
+    ///    
+    /// 4. **Proceeding to Next Round**:
+    ///    After all players have taken their actions (check, call, or fold), the function updates the round number and initiates a new betting round.
     pub async fn handle_demo_mode_bet(data: &web::Data<Server>) {
         let mut game_lock = data.game_state.lock().await;
         let mut check_vec: Vec<usize> = vec![];
@@ -881,6 +1149,23 @@ impl Server {
     // SERVER SIDE GAME LISTENERS FUNCTIONS
     //****************************************************************
 
+    /// Waits for a game action message, specifically looking for `EndRound` messages.
+    ///
+    /// This function listens for incoming WebSocket messages and processes them until a valid `EndRound` message is received. It handles invalid message formats and other types of messages by ignoring them. If the WebSocket channel is closed, the function will return `None`.
+    ///
+    /// # Parameters
+    /// - `rx`: A mutable reference to a `Receiver<String>`, which is the message queue to receive WebSocket messages.
+    ///
+    /// # Returns
+    /// - `Some(MessageType)` if a valid `EndRound` message is received.
+    /// - `None` if the WebSocket channel is closed.
+    ///
+    /// # Example Usage
+    /// ```rust
+    /// if let Some(game_action) = wait_for_game_action(&mut rx).await {
+    ///     // Handle the game action
+    /// }
+    /// ```
     pub async fn wait_for_game_action(rx: &mut Receiver<String>) -> Option<MessageType> {
         loop {
             match rx.recv().await {
@@ -910,6 +1195,23 @@ impl Server {
         }
     }
 
+    /// Waits for a player action message, specifically looking for `PlayerAction` or `DemoMode` messages.
+    ///
+    /// This function listens for WebSocket messages and processes them until a valid `PlayerAction` or `DemoMode` message is received. It handles invalid message formats and other types of messages by ignoring them. The function also includes a timeout mechanism that returns `None` if no message is received within 30 seconds.
+    ///
+    /// # Parameters
+    /// - `rx`: A mutable reference to a `Receiver<String>`, which is the message queue to receive WebSocket messages.
+    ///
+    /// # Returns
+    /// - `Some(MessageType)` if a valid `PlayerAction` or `DemoMode` message is received.
+    /// - `None` if the WebSocket channel is closed or the timeout expires.
+    ///
+    /// # Example Usage
+    /// ```rust
+    /// if let Some(player_action) = wait_for_player_action(&mut rx).await {
+    ///     // Handle the player action
+    /// }
+    /// ```
     pub async fn wait_for_player_action(rx: &mut Receiver<String>) -> Option<MessageType> {
         let timeout_duration = Duration::from_secs(30);
 
@@ -949,6 +1251,23 @@ impl Server {
         }
     }
 
+    /// Waits for a discard action message, specifically looking for `DiscardAction` or `DemoMode` messages.
+    ///
+    /// This function listens for WebSocket messages and processes them until a valid `DiscardAction` or `DemoMode` message is received. It handles invalid message formats and other types of messages by ignoring them. The function also includes a timeout mechanism that returns `None` if no message is received within 30 seconds.
+    ///
+    /// # Parameters
+    /// - `rx`: A mutable reference to a `Receiver<String>`, which is the message queue to receive WebSocket messages.
+    ///
+    /// # Returns
+    /// - `Some(MessageType)` if a valid `DiscardAction` or `DemoMode` message is received.
+    /// - `None` if the WebSocket channel is closed or the timeout expires.
+    ///
+    /// # Example Usage
+    /// ```rust
+    /// if let Some(discard_action) = wait_for_discard_action(&mut rx).await {
+    ///     // Handle the discard action
+    /// }
+    /// ```
     pub async fn wait_for_discard_action(rx: &mut Receiver<String>) -> Option<MessageType> {
         let timeout_duration = Duration::from_secs(30);
 
@@ -988,6 +1307,31 @@ impl Server {
         }
     }
 
+    /// Handles a statistics request message, processing it based on the specified `stats_menu_type`.
+    ///
+    /// This function processes the received stats request message and queries the database for relevant statistics data. The response is formatted in JSON and returned as a `Value`. The function supports three types of statistics menu:
+    /// 1. **Player statistics** - Retrieves data related to players (e.g., player names, money, win percentages, etc.).
+    /// 2. **Game statistics** - Retrieves data related to games (e.g., game variants, winners, players, etc.).
+    /// 3. **Single game statistics** - Retrieves detailed information for a single game using its ID.
+    ///
+    /// The response contains the requested data in a JSON format, or an error message if there are issues with database retrieval or data formatting.
+    ///
+    /// # Parameters
+    /// - `stats_message`: The `MessageType` enum representing the statistics request message. It contains the `stats_menu_type` (e.g., "player", "games", or "single_game") and an optional `selected_option` for a specific game ID.
+    ///
+    /// # Returns
+    /// - A `Value` containing the statistics data in JSON format for the requested menu type (`player_data`, `games_data`, or `single_game_data`).
+    /// - `Value::Null` if an unexpected message type is received or if an error occurs during database operations.
+    ///
+    /// # Example Usage
+    /// ```rust
+    /// let stats_message = MessageType::StatsMenu {
+    ///     stats_menu_type: "player".to_string(),
+    ///     selected_option: "".to_string(),
+    /// };
+    /// let response = handle_stats_request_message(stats_message).await;
+    /// println!("{:?}", response);
+    /// ```
     pub async fn handle_stats_request_message(stats_message: MessageType) -> Value {
         if let MessageType::StatsMenu {
             stats_menu_type,
@@ -1227,6 +1571,27 @@ impl Server {
         Value::Null
     }
 
+    /// Handles a player's action to join, spectate, or leave a game table.
+    ///
+    /// This function processes messages related to a player joining a game table, spectating a game, or leaving a table.
+    /// Depending on the `option` provided, the following actions are taken:
+    /// - **"Join table"**: A player joins the game, either by being a new player or by rejoining an existing game. The function updates the player's information and the game state. If the player is the dealer, they may reset the game with a new game variant.
+    /// - **"Spectate game"**: A player chooses to spectate the game, joining the list of spectators and ensuring they are properly added to the `dealer_choice_spectators` list if needed. The player is removed from the active players list.
+    /// - **"Leave table"**: A player leaves the table, which involves removing the player from the `players`, `spectators`, and `lobby` lists. If the lobby is empty after the player leaves, the game state is reset, including the dealer position.
+    ///
+    /// # Parameters
+    /// - `data`: The shared server state, including game state and player data.
+    /// - `option`: The action the player wants to take (e.g., "Join table", "Spectate game", "Leave table").
+    /// - `dealer_option`: The game variant chosen by the player if they are joining as the dealer (e.g., "Five-Card Draw", "Texas Hold 'Em").
+    /// - `player_name`: The name of the player performing the action.
+    ///
+    /// # Returns
+    /// This function doesn't return any values. It modifies the game state based on the player's action.
+    ///
+    /// # Example Usage
+    /// ```rust
+    /// handle_join_game_message(&server_data, "Join table".to_string(), "Texas Hold 'Em".to_string(), "Alice".to_string()).await;
+    /// ```
     pub async fn handle_join_game_message(
         data: &web::Data<Server>,
         option: String,
@@ -1328,13 +1693,17 @@ impl Server {
                     };
                 }
                 // ensures there is a dealer
-                println!("Player length: {}, dealer index: {}", (game_lock.players.len() as u32), game_lock.dealer);
+                println!(
+                    "Player length: {}, dealer index: {}",
+                    (game_lock.players.len() as u32),
+                    game_lock.dealer
+                );
                 loop {
                     if game_lock.dealer == 0 {
                         break;
                     }
                     if game_lock.players.len() <= usize::try_from(game_lock.dealer).unwrap() {
-                        game_lock.dealer-=1;
+                        game_lock.dealer -= 1;
                     } else {
                         break;
                     }
@@ -1343,18 +1712,28 @@ impl Server {
             "Leave table" => {
                 println!("Player {} chose to leave the table.", player_name);
                 let mut game_lock = data.game_state.lock().await;
-                game_lock.players.retain(|player| player.player_name != player_name);
-                game_lock.spectators.retain(|player| player.player_name != player_name);
-                game_lock.lobby.retain(|player| player.player_name != player_name);
+                game_lock
+                    .players
+                    .retain(|player| player.player_name != player_name);
+                game_lock
+                    .spectators
+                    .retain(|player| player.player_name != player_name);
+                game_lock
+                    .lobby
+                    .retain(|player| player.player_name != player_name);
                 // check if lobby is empty, and if so, reset entire game state
                 // ensures there is a dealer
-                println!("Player length: {}, dealer index: {}", (game_lock.players.len() as u32), game_lock.dealer);
+                println!(
+                    "Player length: {}, dealer index: {}",
+                    (game_lock.players.len() as u32),
+                    game_lock.dealer
+                );
                 loop {
                     if game_lock.dealer == 0 {
                         break;
                     }
                     if game_lock.players.len() <= usize::try_from(game_lock.dealer).unwrap() {
-                        game_lock.dealer-=1;
+                        game_lock.dealer -= 1;
                     } else {
                         break;
                     }
@@ -1369,6 +1748,24 @@ impl Server {
     }
 }
 
+/// WebSocket handler for establishing a WebSocket connection with clients.
+///
+/// This handler is triggered when a client sends a request to the `/ws/` endpoint.
+/// It initializes the WebSocket connection, using the sessions and transmission
+/// channels provided by the server state, and sets up the communication between
+/// the client and the server.
+///
+/// # Arguments
+///
+/// * `req` - The HTTP request object that contains details about the WebSocket connection request.
+/// * `stream` - The payload stream that will carry data between the client and the server.
+/// * `data` - Shared server data containing the state of the application, including active sessions
+///           and the message-passing transmission channel.
+///
+/// # Returns
+///
+/// Returns a `Responder` that either establishes the WebSocket connection or handles any errors
+/// that may occur during the connection setup.
 #[get("/ws/")]
 async fn websocket(
     req: actix_web::HttpRequest,
@@ -1382,6 +1779,21 @@ async fn websocket(
     resp
 }
 
+/// HTTP handler for retrieving statistics based on query parameters.
+///
+/// This handler listens to the `/stats` endpoint and processes the query parameters sent by the client.
+/// It retrieves statistics based on the provided message type and returns a JSON response containing
+/// player data, game data, or single game data as needed.
+///
+/// # Arguments
+///
+/// * `req` - The HTTP request object, which contains the query string sent by the client.
+///
+/// # Returns
+///
+/// Returns a JSON response containing statistics based on the query. If no valid statistics are found,
+/// it returns an empty response. The response is structured with the keys `player_data`, `games_data`,
+/// and `single_game_data`.
 #[allow(clippy::needless_return)]
 #[get("/stats")]
 async fn stats(req: HttpRequest) -> impl Responder {
@@ -1412,6 +1824,20 @@ async fn stats(req: HttpRequest) -> impl Responder {
     };
 }
 
+/// Starts a new game based on the chosen game variant.
+///
+/// This handler listens for a GET request to the `/startgame` endpoint. When the request is made, it
+/// retrieves the game variant currently set in the `game_state` and moves players who chose to spectate
+/// into the appropriate vector. It then starts a new game using the selected game type in a new async task.
+///
+/// # Arguments
+///
+/// * `data` - Shared server data containing the state of the application, which includes information
+///           about the current game state and players.
+///
+/// # Returns
+///
+/// Returns an HTTP response with a success message. The response is a JSON object with an empty string.
 #[get("/startgame")]
 #[allow(unused_assignments)]
 async fn startgame(data: web::Data<Server>) -> impl Responder {
@@ -1441,6 +1867,22 @@ async fn startgame(data: web::Data<Server>) -> impl Responder {
     HttpResponse::Ok().json("{}")
 }
 
+/// Handles player login requests.
+///
+/// This handler listens for POST requests to the `/login/{player_name}` endpoint. It verifies the player's
+/// login credentials and either successfully adds the player to the lobby or returns an error if the credentials
+/// are invalid or if the username in the path doesn't match the one in the request body.
+///
+/// # Arguments
+///
+/// * `data` - Shared server data containing the state of the application, including the game state and lobby.
+/// * `player_name` - The player name extracted from the request URL path.
+/// * `login_message` - The message containing login credentials (username and password).
+///
+/// # Returns
+///
+/// Returns an HTTP response indicating whether the login was successful or not. If successful, the player
+/// is added to the lobby and an update is broadcasted. If unsuccessful, an error message is returned.
 #[post("/login/{player_name}")]
 #[allow(unused_assignments)]
 async fn player_login(
@@ -1517,6 +1959,23 @@ async fn player_login(
     }
 }
 
+/// Handles player registration requests.
+///
+/// This handler listens for POST requests to the `/register/{player_name}` endpoint. It processes the registration
+/// of a new player by validating the provided username and password, checking if the username already exists in the
+/// database, and if not, adding the new player to the database and the game lobby.
+///
+/// # Arguments
+///
+/// * `data` - Shared server data containing the state of the application, including the current game state and player lobby.
+/// * `player_name` - The player name extracted from the request URL path.
+/// * `register_message` - The message containing registration details, including the username and password.
+///
+/// # Returns
+///
+/// Returns an HTTP response indicating whether the registration was successful or not:
+/// - If the registration is successful, the player is added to the lobby, and a success message is returned.
+/// - If the registration fails (e.g., username already exists), an error message is returned.
 #[post("/register/{player_name}")]
 #[allow(unused_assignments)]
 async fn player_register(

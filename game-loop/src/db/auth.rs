@@ -1,6 +1,31 @@
 use crate::db::dbclient::{DbClient, MONGO_URI};
 use crate::game::player::Player;
 
+/// Logs in a player by verifying their username and password.
+///
+/// # Arguments
+///
+/// * `username` - A `String` containing the player's username.
+/// * `password` - A `String` containing the player's password.
+///
+/// # Returns
+///
+/// * `Ok(Player)` - If authentication is successful.
+/// * `Err(String)` - If authentication fails due to incorrect credentials or missing player.
+///
+/// # Errors
+///
+/// Returns an error if the password is incorrect or the player is not found.
+///
+/// # Example
+///
+/// ```rust
+/// let result = login_player("player1".to_string(), "password123".to_string()).await;
+/// match result {
+///     Ok(player) => println!("Welcome, {}!", player.player_name),
+///     Err(e) => println!("Login failed: {}", e),
+/// }
+/// ```
 pub async fn login_player(username: String, password: String) -> Result<Player, String> {
     let db_client = DbClient::new(&MONGO_URI).await.unwrap();
 

@@ -2,4 +2,5 @@
 /// Calls to find, retrieve, update, and push are found here.
 pub mod dbclient;
 
+/// Authentication module used for verifying user credentials
 pub mod auth;

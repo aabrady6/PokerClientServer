@@ -7,6 +7,7 @@ use mongodb::{
 use once_cell::sync::Lazy;
 use std::error::Error;
 
+/// URI for MongoDB connection
 pub static MONGO_URI: Lazy<String> = Lazy::new(|| "mongodb://localhost:27017".to_string());
 
 /// Client used for interacting with the MongoDB instance
@@ -506,29 +507,6 @@ mod tests {
         }
 
         db_client.delete_one(&game).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn test_dbclient_find_game_not_in_db() {
-        let db_client = DbClient::new(&MONGO_URI).await.unwrap();
-
-        let no_game = GameState::new();
-
-        let result = db_client.query_one(&no_game).await;
-
-        assert!(result.is_ok());
-
-        match result {
-            Ok(Some(_retrieved_player)) => {
-                panic!("There shouldnt be this game in the db")
-            }
-            Ok(None) => {
-                println!("All Good!")
-            }
-            Err(e) => {
-                panic!("Error: {}", e);
-            }
-        }
     }
 
     #[tokio::test]

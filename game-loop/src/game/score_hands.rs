@@ -876,6 +876,23 @@ pub fn get_best_5_card_hand(hand: &Hand) -> ScoredHand {
     hand_type
 }
 
+/// Calculates the best 5-card hand from a given 7-card hand.
+///
+/// This function takes a `Hand` containing 7 cards and evaluates all possible 5-card combinations to determine
+/// the best possible hand. The best hand is determined by the highest-scoring 5-card hand according to poker hand rankings.
+///
+/// # Arguments
+/// * `hand`: A reference to a `Hand` containing 7 cards.
+///
+/// # Returns
+/// Returns a `ScoredHand`, which represents the best 5-card hand from the given 7-card hand.
+///
+/// # Panics
+/// This function assumes that the input hand contains exactly 7 cards. If the hand does not contain enough cards,
+/// it may cause unexpected behavior. Ensure the `Hand` has 7 cards before calling this function.
+/// - This function uses the `combinations(5)` method to generate all possible combinations of 5 cards from the 7-card hand.
+/// - Then, it maps each combination of 5 cards into a `ScoredHand` by calling `get_best_5_card_hand` on the `Hand` created from the combination.
+/// - The function then returns the maximum `ScoredHand` among all 5-card combinations, representing the best possible hand.
 pub fn get_best_from_7_card_hand(hand: &Hand) -> ScoredHand {
     hand.get_hand_cards()
         .iter()

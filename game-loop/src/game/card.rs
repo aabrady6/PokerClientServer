@@ -241,9 +241,9 @@ impl TryFrom<Suit> for char {
 #[derive(Debug, Eq, Clone, Copy, Serialize, Deserialize)]
 pub struct Card {
     /// Value of the card in type `Value` ie Value::Six
-    value: Value,
+    pub value: Value,
     /// Suit of the card in type `Suit` ie Suit::Heart
-    suit: Suit,
+    pub suit: Suit,
     /// True - face up, False - face down
     pub face_up: bool,
 }
@@ -342,24 +342,28 @@ impl Card {
     }
 }
 
+/// Implements `PartialOrd` to allow ordering of `Card` instances.
 impl PartialOrd for Card {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
+/// Implements `Ord` to define a total ordering for `Card` instances based on value.
 impl Ord for Card {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.get_value_as_u8().cmp(&other.get_value_as_u8())
     }
 }
 
+/// Implements `PartialEq` to compare two `Card` instances for equality.
 impl PartialEq for Card {
     fn eq(&self, other: &Self) -> bool {
         self.value == other.value && self.suit == other.suit
     }
 }
 
+/// Implements `FromStr` to enable parsing a `Card` from a string.
 impl FromStr for Card {
     type Err = &'static str;
 
@@ -382,6 +386,7 @@ impl FromStr for Card {
     }
 }
 
+/// Implements `Display` to format a `Card` as a string.
 impl fmt::Display for Card {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let value_char = char::try_from(self.value).unwrap();

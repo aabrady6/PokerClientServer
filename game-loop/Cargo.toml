@@ -15,17 +15,8 @@ name = "main"
 path = "src/main.rs"
 
 [[bin]]
-name = "db_fill"
-path = "src/db/bin/fill_db.rs"
-
-[[bin]]
-name = "db_clean"
-path = "src/db/bin/clean_db.rs"
-
-[[bin]]
 name = "db_empty"
 path = "src/db/bin/empty_db.rs"
-
 
 [dependencies]
 rand = "0.8"

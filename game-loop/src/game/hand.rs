@@ -33,6 +33,26 @@ impl Hand {
         Self { cards, hand_limit }
     }
 
+    /// Creates a new instance of a struct from a given vector of cards.
+    ///
+    /// This function takes a vector of `Card` objects and creates an instance of the struct
+    /// by initializing the `cards` field with the provided vector and setting the `hand_limit`
+    /// to the number of cards in the vector. The `hand_limit` is stored as a `u8` to represent
+    /// the maximum number of cards in the hand.
+    ///
+    /// # Parameters
+    /// - `cards`: A `Vec<Card>` representing the collection of cards to initialize the hand.
+    ///
+    /// # Returns
+    /// Returns an instance of the struct with the provided cards and the calculated hand limit.
+    ///
+    /// # Example
+    /// ```rust
+    /// let cards = vec![card1, card2, card3];
+    /// let hand = MyStruct::from_cards(cards);
+    /// assert_eq!(hand.cards.len(), 3);
+    /// assert_eq!(hand.hand_limit, 3);
+    /// ```
     pub fn from_cards(cards: Vec<Card>) -> Self {
         let hand_limit = cards.len() as u8;
         Self { cards, hand_limit }
@@ -180,6 +200,21 @@ impl Hand {
         Ok(())
     }
 
+    /// Returns a new `Hand` containing only the face-up cards from the current hand.
+    ///
+    /// This function iterates through the cards in the current hand and selects those that have
+    /// the `face_up` property set to `true`. It then creates and returns a new `Hand` instance
+    /// that includes only the face-up cards.
+    ///
+    /// # Returns
+    /// A `Hand` object containing only the face-up cards from the current hand.
+    ///
+    /// # Example
+    /// ```rust
+    /// let hand = Hand::new(5); // Assume hand is initialized with some cards.
+    /// let face_up_hand = hand.get_face_up_cards();
+    /// println!("Face-up cards: {:?}", face_up_hand.cards);
+    /// ```
     pub fn get_face_up_cards(&self) -> Hand {
         let mut face_up_cards: Vec<Card> = Vec::new();
         for card in self.cards.clone() {
@@ -277,6 +312,18 @@ impl Hand {
         self.cards.push(c);
     }
 
+    /// Sorts the cards in the hand in descending order of value and suit.
+    ///
+    /// This function sorts the cards by their values and suits. The value of each card is
+    /// calculated by multiplying the card's value (as a `u8`) by 10 and then adding the suit (also as a `u8`).
+    /// The sorting is done in descending order, so the cards with the highest values come first.
+    ///
+    /// # Example
+    /// ```rust
+    /// let mut hand = Hand::new(5);
+    /// hand.sort();
+    /// println!("Sorted hand: {:?}", hand.cards);
+    /// ```
     pub fn sort(&mut self) {
         self.cards.sort_by(|a, b| {
             let a_value = a.get_value_as_u8() * 10 + a.get_suit() as u8;
@@ -285,11 +332,39 @@ impl Hand {
         });
     }
 
+    /// Returns the card with the largest value from the hand.
+    ///
+    /// This function sorts the cards in the hand first, then retrieves the first card (which has the highest value).
+    /// It returns the `Value` of the card with the highest value.
+    ///
+    /// # Returns
+    /// The `Value` of the card with the highest value in the hand.
+    ///
+    /// # Example
+    /// ```rust
+    /// let hand = Hand::new(5);
+    /// let largest_value = hand.get_largest_value();
+    /// println!("Largest value card: {:?}", largest_value);
+    /// ```
     pub fn get_largest_value(&mut self) -> Value {
         self.sort();
         self.cards[0].get_value()
     }
 
+    /// Returns the card with the smallest value from the hand.
+    ///
+    /// This function sorts the cards in the hand first, then retrieves the last card (which has the lowest value).
+    /// It returns the `Value` of the card with the smallest value.
+    ///
+    /// # Returns
+    /// The `Value` of the card with the smallest value in the hand.
+    ///
+    /// # Example
+    /// ```rust
+    /// let hand = Hand::new(5);
+    /// let smallest_value = hand.get_smallest_value();
+    /// println!("Smallest value card: {:?}", smallest_value);
+    /// ```
     pub fn get_smallest_value(&mut self) -> Value {
         self.sort();
         self.cards[self.cards.len() - 1].get_value()
@@ -297,6 +372,19 @@ impl Hand {
 }
 
 impl Default for Hand {
+    /// Creates a new `Hand` instance with an empty set of cards and a hand limit of 0.
+    ///
+    /// This is the default implementation for the `Hand` struct, which initializes the `cards` vector as empty
+    /// and the `hand_limit` as 0.
+    ///
+    /// # Returns
+    /// A new `Hand` instance with no cards and a hand limit of 0.
+    ///
+    /// # Example
+    /// ```rust
+    /// let hand: Hand = Default::default();
+    /// println!("Default hand: {:?}", hand);
+    /// ```
     fn default() -> Self {
         Self {
             cards: Vec::new(),
@@ -305,15 +393,49 @@ impl Default for Hand {
     }
 }
 
-// This is some temp code meant to work for comparisons
+/// Implements the `PartialEq` trait for `Hand`, allowing comparison for equality.
+///
+/// This implementation checks if two hands are equal by comparing their `cards` vector.
+/// Two hands are considered equal if they have the same cards, regardless of their order.
+///
+/// # Example
+/// ```rust
+/// let hand1 = Hand::new(5);
+/// let hand2 = Hand::new(5);
+/// if hand1 == hand2 {
+///     println!("The hands are equal!");
+/// }
+/// ```
 impl PartialEq for Hand {
     fn eq(&self, other: &Self) -> bool {
         self.cards == other.cards
     }
 }
-// I dont know if I need this
+
+/// Implements the `Eq` trait for `Hand`, marking it as an "equatable" type.
+///
+/// This trait allows for `Hand` to be used in contexts that require equality comparisons, such as in hash maps
+/// or when checking for set membership. The `Eq` trait is typically used for types that can be compared for
+/// complete equality.
+///
+/// # Example
+/// ```rust
+/// let hand1 = Hand::new(5);
+/// let hand2 = Hand::new(5);
+/// assert!(hand1 == hand2);
+/// ```
 impl Eq for Hand {}
 
+/// Implements the `Display` trait for `Hand`, allowing it to be formatted as a string.
+///
+/// This implementation converts the `Hand` into a human-readable string where each card is represented by its
+/// string format (e.g., `"Ace of Spades"`, `"7 of Hearts"`) and the cards are joined by commas.
+///
+/// # Example
+/// ```rust
+/// let hand = Hand::new(5);
+/// println!("Your hand: {}", hand);
+/// ```
 impl Display for Hand {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut hand_string = vec![];

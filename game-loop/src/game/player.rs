@@ -127,6 +127,12 @@ impl Player {
         }
     }
 
+    /// Creates a new empty `Player` instance with default values.
+    ///
+    /// This function is typically used to initialize a `Player` object with no data (i.e., empty fields)
+    /// before any further interaction with the player object (e.g., before setting the player's name, money, etc.).
+    /// It is useful when creating a placeholder or initializing a player in a scenario where you don't yet have all
+    /// the data to populate the fields.
     pub fn empty() -> Self {
         Self {
             player_id: 0,
@@ -203,6 +209,27 @@ impl Player {
         })
     }
 
+    /// Hashes a password using the Argon2 hashing algorithm.
+    ///
+    /// This function generates a secure hash for the provided password string using Argon2.
+    /// It also generates a salt to add an additional layer of security to the hash.
+    ///
+    /// # Arguments
+    /// * `password`: A reference to the password string that needs to be hashed.
+    ///
+    /// # Returns
+    /// Returns a `Result` that, on success, contains the hashed password as a string.
+    /// On failure, it returns an error message as a string.
+    ///
+    /// # Example
+    /// ```rust
+    /// let password = "my_secure_password";
+    /// let hashed_password = hash_password(password);
+    /// assert!(hashed_password.is_ok());
+    /// ```
+    ///
+    /// # Errors
+    /// This function returns an error if there is an issue generating the salt or hashing the password.
     pub fn hash_password(password: &str) -> Result<String, String> {
         let salt = SaltString::generate(&mut OsRng);
         let argon2 = Argon2::default();
@@ -213,6 +240,29 @@ impl Player {
         }
     }
 
+    /// Verifies if a given password matches the stored hashed password.
+    ///
+    /// This function checks if the provided password, when hashed, matches the stored password hash.
+    /// It uses Argon2 to verify the password against the hash.
+    ///
+    /// # Arguments
+    /// * `password`: A reference to the password string that needs to be verified.
+    ///
+    /// # Returns
+    /// Returns `true` if the password matches the stored hash, otherwise `false`.
+    ///
+    /// # Example
+    /// ```rust
+    /// let player = Player {
+    ///     hashed_password: "$argon2id$v=19$m=65536,t=4,p=1$some_salt$hashed_password_string".to_string(),
+    ///     // other fields
+    /// };
+    /// let is_valid = player.verify_password("input_password");
+    /// assert!(is_valid);
+    /// ```
+    ///
+    /// # Errors
+    /// This function returns `false` if the password verification fails or if the stored hash is invalid.
     pub fn verify_password(&self, password: &str) -> bool {
         let parsed_hash = PasswordHash::new(&self.hashed_password);
         match parsed_hash {
@@ -223,71 +273,236 @@ impl Player {
         }
     }
 
-    //
-    // These getters and setters are found with https://stackoverflow.com/questions/35390615/writing-getter-setter-properties-in-rust
-    // These I dont want to pass through immediately but instead want to leave open to usage
-    // Later can easily pass this into a constructor to instantiate it but for now we might want to change and get
-    // in relation to communication
+    /// Sets the player's name to a new value.
+    ///
+    /// # Arguments
+    /// * `new_name`: A string containing the new name to assign to the player.
+    ///
+    /// # Example
+    /// ```rust
+    /// let mut player = Player::empty();
+    /// player.set_name("Alice".to_string());
+    /// assert_eq!(player.get_name(), "Alice");
+    /// ```
     pub fn set_name(&mut self, new_name: String) {
         self.player_name = new_name;
     }
 
+    /// Sets the player's ID to a new value.
+    ///
+    /// # Arguments
+    /// * `new_id`: A u32 representing the new player ID.
+    ///
+    /// # Example
+    /// ```rust
+    /// let mut player = Player::empty();
+    /// player.set_id(1);
+    /// assert_eq!(player.get_id(), &1);
+    /// ```
     pub fn set_id(&mut self, new_id: u32) {
         self.player_id = new_id
     }
 
+    /// Retrieves the player's current amount of money.
+    ///
+    /// # Returns
+    /// A reference to the player's `player_money` value.
+    ///
+    /// # Example
+    /// ```rust
+    /// let player = Player::empty();
+    /// assert_eq!(*player.get_money(), 0);
+    /// ```
     pub fn get_money(&self) -> &u32 {
         &self.player_money
     }
 
+    /// Sets the player's amount of money to a new value.
+    ///
+    /// # Arguments
+    /// * `new_money`: A u32 representing the new amount of money the player has.
+    ///
+    /// # Example
+    /// ```rust
+    /// let mut player = Player::empty();
+    /// player.set_money(500);
+    /// assert_eq!(*player.get_money(), 500);
+    /// ```
     pub fn set_money(&mut self, new_money: u32) {
         self.player_money = new_money;
     }
 
+    /// Retrieves the player's current name.
+    ///
+    /// # Returns
+    /// A reference to the player's `player_name` string.
+    ///
+    /// # Example
+    /// ```rust
+    /// let player = Player::empty();
+    /// assert_eq!(player.get_name(), ""); // Empty string if uninitialized
+    /// ```
     pub fn get_name(&self) -> &String {
         &self.player_name
     }
 
+    /// Retrieves the player's ID.
+    ///
+    /// # Returns
+    /// A reference to the player's `player_id` value.
+    ///
+    /// # Example
+    /// ```rust
+    /// let player = Player::empty();
+    /// assert_eq!(*player.get_id(), 0);
+    /// ```
     pub fn get_id(&self) -> &u32 {
         &self.player_id
     }
 
+    /// Retrieves the total number of games the player has played.
+    ///
+    /// # Returns
+    /// The total number of games as a `u32` value.
+    ///
+    /// # Example
+    /// ```rust
+    /// let player = Player::empty();
+    /// assert_eq!(player.get_games(), 0);
+    /// ```
     pub fn get_games(&self) -> u32 {
         self.total_games
     }
 
+    /// Sets the total number of games the player has played to a new value.
+    ///
+    /// # Arguments
+    /// * `new_games`: A u32 representing the new total number of games played.
+    ///
+    /// # Example
+    /// ```rust
+    /// let mut player = Player::empty();
+    /// player.set_games(10);
+    /// assert_eq!(player.get_games(), 10);
+    /// ```
     pub fn set_games(&mut self, new_games: u32) {
         self.total_games = new_games;
     }
 
+    /// Retrieves the total number of wins the player has.
+    ///
+    /// # Returns
+    /// The total number of wins as a `u32` value.
+    ///
+    /// # Example
+    /// ```rust
+    /// let player = Player::empty();
+    /// assert_eq!(player.get_wins(), 0);
+    /// ```
     pub fn get_wins(&self) -> u32 {
         self.total_wins
     }
 
+    /// Sets the total number of wins the player has to a new value.
+    ///
+    /// # Arguments
+    /// * `new_wins`: A u32 representing the new total number of wins.
+    ///
+    /// # Example
+    /// ```rust
+    /// let mut player = Player::empty();
+    /// player.set_wins(5);
+    /// assert_eq!(player.get_wins(), 5);
+    /// ```
     pub fn set_wins(&mut self, new_wins: u32) {
         self.total_wins = new_wins;
     }
 
+    /// Retrieves the total number of losses the player has.
+    ///
+    /// # Returns
+    /// The total number of losses as a `u32` value.
+    ///
+    /// # Example
+    /// ```rust
+    /// let player = Player::empty();
+    /// assert_eq!(player.get_losses(), 0);
+    /// ```
     pub fn get_losses(&self) -> u32 {
         self.total_losses
     }
 
+    /// Sets the total number of losses the player has to a new value.
+    ///
+    /// # Arguments
+    /// * `new_losses`: A u32 representing the new total number of losses.
+    ///
+    /// # Example
+    /// ```rust
+    /// let mut player = Player::empty();
+    /// player.set_losses(3);
+    /// assert_eq!(player.get_losses(), 3);
+    /// ```
     pub fn set_losses(&mut self, new_losses: u32) {
         self.total_losses = new_losses;
     }
 
+    /// Retrieves the player's total earnings.
+    ///
+    /// # Returns
+    /// The total earnings as a `u32` value.
+    ///
+    /// # Example
+    /// ```rust
+    /// let player = Player::empty();
+    /// assert_eq!(player.get_earnings(), 0);
+    /// ```
     pub fn get_earnings(&self) -> u32 {
         self.total_earnings
     }
 
+    /// Sets the player's total earnings to a new value.
+    ///
+    /// # Arguments
+    /// * `new_earnings`: A u32 representing the new total earnings.
+    ///
+    /// # Example
+    /// ```rust
+    /// let mut player = Player::empty();
+    /// player.set_earnings(1000);
+    /// assert_eq!(player.get_earnings(), 1000);
+    /// ```
     pub fn set_earnings(&mut self, new_earnings: u32) {
         self.total_earnings = new_earnings;
     }
 
+    /// Sets the player's hand to a new hand.
+    ///
+    /// # Arguments
+    /// * `hand`: The new `Hand` object to assign to the player.
+    ///
+    /// # Example
+    /// ```rust
+    /// let mut player = Player::empty();
+    /// let new_hand = Hand::new(5);
+    /// player.set_hand(new_hand);
+    /// ```
     pub fn set_hand(&mut self, hand: Hand) {
         self.player_hand = hand
     }
 
+    /// Refills the player's money to 1000 if the player's money is below 10.
+    ///
+    /// This function checks if the player's money is below 10 and sets it to 1000.
+    /// It prints a message when the player's money is refilled.
+    ///
+    /// # Example
+    /// ```rust
+    /// let mut player = Player::empty();
+    /// player.set_money(5);
+    /// player.infinite_money();
+    /// assert_eq!(player.get_money(), &1000);
+    /// ```
     pub fn infinite_money(&mut self) {
         if self.player_money < 10 {
             self.player_money = 1000;
@@ -671,11 +886,56 @@ impl Player {
     }
 }
 
+/// Implementation of the `DbEntity` trait for the `Player` struct.
+///
+/// This implementation provides methods for serializing and deserializing `Player` objects
+/// to and from MongoDB documents. It defines how to store `Player` objects in a MongoDB collection,
+/// and how to reconstruct `Player` objects from MongoDB documents.
+///
+/// # Methods
+///
+/// - `collection_name`: Returns the name of the MongoDB collection used to store `Player` objects.
+/// - `to_document`: Serializes a `Player` object into a MongoDB `Document`.
+/// - `from_document`: Deserializes a MongoDB `Document` into a `Player` object.
+/// - `unique_field`: Returns a MongoDB `Document` containing a unique identifier for the `Player` object.
+///
+/// # Example
+/// ```rust
+/// let player = Player::empty();
+/// let document = player.to_document().unwrap();
+/// let deserialized_player = Player::from_document(&document).unwrap();
+/// assert_eq!(player.player_name, deserialized_player.player_name);
+/// ```
 impl DbEntity for Player {
+    /// Returns the name of the MongoDB collection where `Player` objects are stored.
+    ///
+    /// # Returns
+    /// A string representing the collection name (`"players"`).
+    ///
+    /// # Example
+    /// ```rust
+    /// assert_eq!(Player::collection_name(), "players");
+    /// ```
     fn collection_name() -> &'static str {
         "players"
     }
 
+    /// Serializes the `Player` object into a MongoDB `Document`.
+    ///
+    /// This method converts the `Player` object into a BSON-compatible `Document` suitable for storage
+    /// in a MongoDB collection. It includes the player's attributes, such as their `player_id`, `player_name`,
+    /// and `player_money`, among others.
+    ///
+    /// # Returns
+    /// - `Ok(Document)`: The `Player` object is successfully serialized into a `Document`.
+    /// - `Err(String)`: If there is an error during serialization, an error message is returned.
+    ///
+    /// # Example
+    /// ```rust
+    /// let player = Player::empty();
+    /// let document = player.to_document().unwrap();
+    /// assert_eq!(document.get_str("player_name").unwrap(), "");
+    /// ```
     fn to_document(&self) -> Result<Document, String> {
         Ok(doc! {
             "player_id": self.player_id as i64,
@@ -695,6 +955,41 @@ impl DbEntity for Player {
         })
     }
 
+    /// Deserializes a MongoDB `Document` into a `Player` object.
+    ///
+    /// This method takes a MongoDB `Document` and converts it into a `Player` struct. The document should
+    /// contain all the fields needed to initialize a `Player` object, such as `player_id`, `player_name`, and
+    /// other player-related information.
+    ///
+    /// # Arguments
+    /// * `doc`: The MongoDB `Document` to be deserialized into a `Player` object.
+    ///
+    /// # Returns
+    /// - `Ok(Player)`: The `Document` is successfully deserialized into a `Player` object.
+    /// - `Err(String)`: If there is an error during deserialization, an error message is returned.
+    ///
+    /// # Example
+    /// ```rust
+    /// let doc = doc! {
+    ///     "player_id": 1,
+    ///     "player_name": "Alice",
+    ///     "hashed_password": "hashed_value",
+    ///     "player_money": 500,
+    ///     "total_games": 10,
+    ///     "total_wins": 5,
+    ///     "total_losses": 5,
+    ///     "round_win": 1,
+    ///     "total_earnings": 1000,
+    ///     "total_wagered_per_game": 200,
+    ///     "player_hand": [],
+    ///     "player_choices": {},
+    ///     "last_move": "move",
+    ///     "token": "token_value"
+    /// };
+    ///
+    /// let player = Player::from_document(&doc).unwrap();
+    /// assert_eq!(player.player_name, "Alice");
+    /// ```
     fn from_document(doc: &Document) -> Result<Self, String> {
         Ok(Player {
             player_id: doc.get_i64("player_id").map_err(|e| e.to_string())? as u32,
@@ -733,6 +1028,20 @@ impl DbEntity for Player {
         })
     }
 
+    /// Returns a MongoDB `Document` containing a unique field for the `Player` object.
+    ///
+    /// This is used for querying the `players` collection to find a `Player` by a unique identifier.
+    /// For this implementation, the unique field is the player's `player_name`.
+    ///
+    /// # Returns
+    /// A MongoDB `Document` containing the unique field.
+    ///
+    /// # Example
+    /// ```rust
+    /// let player = Player::empty();
+    /// let unique_doc = player.unique_field();
+    /// assert_eq!(unique_doc.get_str("player_name").unwrap(), "");
+    /// ```
     fn unique_field(&self) -> Document {
         doc! { "player_name": self.player_name.clone() }
     }
