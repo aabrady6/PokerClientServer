@@ -16,6 +16,7 @@ use itertools::Itertools;
 use serde_json::{from_str, json, Map, Value};
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex, OnceLock};
+use tokio::io::{self, AsyncBufReadExt, BufReader};
 use tokio::sync::mpsc::Receiver;
 use tokio::sync::{broadcast, mpsc, Mutex as tMutex};
 use tokio::time::Duration;
@@ -2066,5 +2067,52 @@ async fn player_register(
         HttpResponse::BadRequest().json(json!({
             "error": "Invalid request format"
         }))
+    }
+}
+
+/// Asynchronous function that listens for admin commands via standard input.
+///
+/// This function continuously reads lines from `stdin` and processes admin commands:
+///
+/// - `"stop"`: Shuts down the server immediately.
+/// - `"reset"`: Resets game and player statistics in the database.
+///
+/// # Behavior
+/// - Runs indefinitely, processing user input in a loop.
+/// - Uses `tokio::io::BufReader` to handle asynchronous input.
+/// - Interacts with a MongoDB database via `DbClient` to reset statistics.
+pub async fn admin_controls() {
+    let stdin = io::stdin();
+    let reader = BufReader::new(stdin);
+    let mut lines = reader.lines();
+    while let Some(line_result) = lines.next_line().await.transpose() {
+        match line_result {
+            Ok(line) => match line.trim() {
+                "stop" => {
+                    println!("Shutting down server...");
+                    std::process::exit(0);
+                }
+                "reset" => {
+                    let db_client = DbClient::new(&MONGO_URI).await.unwrap();
+                    let game = db_client.reset_game_stats().await;
+                    match game {
+                        Ok(_) => println!("Game stats are reset"),
+                        Err(e) => println!("Error Deleting Games: {}", e),
+                    }
+
+                    let players = db_client.reset_player_stats().await;
+                    match players {
+                        Ok(_) => println!("Player stats are reset"),
+                        Err(e) => println!("Error Deleting Player Stats: {}", e),
+                    }
+                }
+                _ => {
+                    println!("Unknown command: {}. \n Available Commands: \nstop - shuts down the server\nreset - resets the db stats", line);
+                }
+            },
+            Err(e) => {
+                eprintln!("Error reading line: {}", e);
+            }
+        }
     }
 }

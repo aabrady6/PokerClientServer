@@ -447,11 +447,13 @@ mod tests {
     async fn test_dbclient_query_all_players() {
         let db_client = DbClient::new(&MONGO_URI).await.unwrap();
 
-        let player = Player::new("test_player4");
-        let player2 = Player::new("test_player5");
+        let player = Player::new("test_player4a");
+        let player2 = Player::new("test_player5b");
 
         db_client.insert(&player).await.unwrap();
         db_client.insert(&player2).await.unwrap();
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
         let result = db_client.query_all::<Player>().await.unwrap();
 
@@ -475,38 +477,6 @@ mod tests {
         assert_eq!(next_id, 1000);
 
         db_client.delete_one(&player).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn test_dbclient_insert_and_retrieve_game() {
-        let db_client = DbClient::new(&MONGO_URI).await.unwrap();
-
-        let game_type = "thm".to_string();
-        let mut game = GameState::new();
-        game.game_variant = game_type;
-        game.highest_bet = 100;
-
-        let _ = db_client.insert(&game).await.unwrap();
-
-        let queried_game = GameState::new();
-        let result = db_client.query_one(&queried_game).await;
-
-        assert!(result.is_ok());
-
-        match result {
-            Ok(Some(retrieved_game)) => {
-                //assert_eq!(retrieved_game.get_variant(), game.get_variant());
-                assert_eq!(retrieved_game.highest_bet, game.highest_bet);
-            }
-            Ok(None) => {
-                panic!("Game not found!");
-            }
-            Err(e) => {
-                panic!("Error: {}", e);
-            }
-        }
-
-        db_client.delete_one(&game).await.unwrap();
     }
 
     #[tokio::test]

@@ -68,6 +68,12 @@ cd game-loop
 cargo run
 ```
 
+### 4. Availbe Commands while the Server is Running
+The admin is able to reset all game and player stats using stdin on the server terminal. Available commands:
+
+* `reset` - resets all game and player stats. Resets the GameID to 0.
+* `stop` - shuts down the server
+
 ## Client Steps
 ### 1. Set the Server IP Address to Join
 In `*/client_gui/poker_gui/`, create a .env file with the following variables, replacing xxx.xx.xx.xx with the actual server IP address:
