@@ -74,7 +74,7 @@ cargo run
 The admin is able to reset all game and player stats using stdin on the server terminal. Available commands:
 
 * `reset` - resets all game and player stats. Resets the GameID to 0.
-* `stop` - shuts down the server
+* `stop` - shuts down the server.
 
 However, the `reset` command should only be used while the table is empty, and no games are currently being played.
 
