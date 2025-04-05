@@ -204,7 +204,21 @@ impl GameState {
         self.action_history = Vec::new();
         self.raise_min_max = (0, 0);
 
+        let db_client = DbClient::new(&MONGO_URI).await.unwrap();
+
         for player in &mut self.players {
+            let result = db_client.query_one::<Player>(player).await;
+            match result {
+                Ok(Some(p)) => {
+                    *player = p;
+                }
+                Ok(None) => {
+                    println!("\nPlayer not found in db.");
+                }
+                Err(e) => {
+                    println!("Error retrieving player: {}", e);
+                }
+            };
             player.reset_choices();
             player.round_win = 0;
             player.player_hand = Hand::new(5);
@@ -257,7 +271,21 @@ impl GameState {
         self.action_history = Vec::new();
         self.raise_min_max = (0, 0);
 
+        let db_client = DbClient::new(&MONGO_URI).await.unwrap();
+
         for player in &mut self.players {
+            let result = db_client.query_one::<Player>(player).await;
+            match result {
+                Ok(Some(p)) => {
+                    *player = p;
+                }
+                Ok(None) => {
+                    println!("\nPlayer not found in db.");
+                }
+                Err(e) => {
+                    println!("Error retrieving player: {}", e);
+                }
+            };
             player.reset_choices();
             player.round_win = 0;
             player.player_hand = Hand::new(7);
@@ -310,7 +338,21 @@ impl GameState {
         self.action_history = Vec::new();
         self.raise_min_max = (0, 0);
 
+        let db_client = DbClient::new(&MONGO_URI).await.unwrap();
+
         for player in &mut self.players {
+            let result = db_client.query_one::<Player>(player).await;
+            match result {
+                Ok(Some(p)) => {
+                    *player = p;
+                }
+                Ok(None) => {
+                    println!("\nPlayer not found in db.");
+                }
+                Err(e) => {
+                    println!("Error retrieving player: {}", e);
+                }
+            };
             player.reset_choices();
             player.round_win = 0;
             player.player_hand = Hand::new(2);

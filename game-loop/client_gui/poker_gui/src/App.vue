@@ -7,7 +7,7 @@
       @loggedIn="handleLogin"
     />
     <div v-else-if="!isInLobby">
-      Thanks for playing! Bye bye!
+      {{ notInLobbyText }}
     </div>
     <template v-else>
       <div class="action_info">
@@ -76,24 +76,12 @@
           <Help />
         </div>
       </div>
-      <div
-        v-if="showEndMenu && !isDealerChoiceSpectator"
-        class="end_menu"
-      >
-        <div class="close_btn" @click="closeEndMenu" >X</div>
-        <EndRoundScreen
-          v-bind="endMenuData"
-          @click="submitEndRound"
-        />
+      <div v-if="showEndMenu && !isDealerChoiceSpectator" class="end_menu">
+        <div class="close_btn" @click="closeEndMenu">X</div>
+        <EndRoundScreen v-bind="endMenuData" @click="submitEndRound" />
       </div>
-      <div
-        v-if="showJoinGameMenu"
-        class="join_game_menu"
-      >
-        <EndRoundScreen
-          v-bind="joinGameMenuData"
-          @click="submitJoinGame"
-        />
+      <div v-if="showJoinGameMenu" class="join_game_menu">
+        <EndRoundScreen v-bind="joinGameMenuData" @click="submitJoinGame" />
       </div>
     </template>
   </div>
@@ -149,6 +137,7 @@ const dealerChoiceSpectators = ref([]);
 const lobby = ref([]);
 const selectCardsActive = ref(true);
 const currentAction = ref("Waiting to Start a Game...");
+const notInLobbyText = ref("Waiting for Game to End...");
 
 const isSpectator = computed(() => (
   spectators.value.length
@@ -206,7 +195,7 @@ const controls = computed(() => {
   const isCurrentPlayerTurn = isCurrentPlayer.value;
 
   if (!isCurrentPlayerTurn) {
-    return []; 
+    return [];
   }
 
   if (showEndMenu.value) {
@@ -365,19 +354,18 @@ async function startGameClick() {
   if (canClickStartGame.value) {
     if (players.value.length >= 2 && players.value.length <= maxPlayers.value) {
       try {
-          const response = await fetch(`http://${NODE_SERVER_IP}:${NODE_SERVER_PORT}/startgame`, { 
+          const response = await fetch(`http://${NODE_SERVER_IP}:${NODE_SERVER_PORT}/startgame`, {
               method: "GET",
           });
-          
+
           if (!response.ok) {
               const error = await response.text();
               throw new Error(error);
           }
-          
+
           const data = await response.json();
           gameStarted.value = true;
           canClickStartGame.value = false;
-          console.log("SETTING CANNOT CLICK START GAME!!!");
       } catch (error) {
           console.error("Start game error:", error);
           alert(`Start game failed: ${error.message}`);
@@ -418,7 +406,6 @@ async function clickStatsMenu(message) {
       type: "StatsMenu",
       ...message,
     };
-    console.log("Send stats option:", JSON.stringify(payload));
 
     try {
       const response = await fetch(
@@ -434,26 +421,19 @@ async function clickStatsMenu(message) {
       }
 
       const data = await response.json();
-      console.log("Stats get response:", data);
 
       if (data.player_data) {
-        console.log("player data: ", data.player_data);
         const inner_data = JSON.parse(data.player_data);
-        console.log("inner_data: ", inner_data);
         playerData.value = inner_data;
       }
 
       if (data.games_data) {
-        console.log("games data: ", data.games_data);
         const inner_data = JSON.parse(data.games_data);
-        console.log("inner_data: ", inner_data);
         gamesData.value = inner_data;
       }
 
       if (data.single_game_data) {
-        console.log("single game data: ", data.single_game_data);
         const inner_data = JSON.parse(data.single_game_data);
-        console.log("inner_data: ", inner_data);
         singleGameData.value = inner_data;
       }
     } catch (error) {
@@ -497,6 +477,10 @@ const closeHelpMenu = () => {
 };
 
 const submitEndRound = (message) => {
+  if (message.option === "Leave table") {
+    notInLobbyText.value = "Thanks for Playing! BYE BYE!!!";
+  }
+
   const payload = {
         type: "EndRound",
         player_name: playerName.value,
@@ -509,6 +493,10 @@ const submitEndRound = (message) => {
 }
 
 const submitJoinGame = (message) => {
+  if (message.option === "Leave table") {
+    notInLobbyText.value = "Thanks for Playing! BYE BYE!!!";
+  }
+
   const payload = {
         type: "EndRound",
         player_name: playerName.value,
@@ -534,8 +522,7 @@ socket.onopen = () => {
 socket.onmessage = (event) => {
     try {
         const data = JSON.parse(event.data);
-        console.log("Received game state:", data);
-        
+
         // Update community cards
         if (data.community_cards?.cards) {
           communityCards.value = data.community_cards.cards.map((card) => [
@@ -556,7 +543,7 @@ socket.onmessage = (event) => {
           console.log("Updating dealer index to: ", data.dealer);
           dealerIdx.value = data.dealer;
         }
-       
+
         // Update players
         if (data.players) {
             if (data.players.length >= 2 && data.players.length <= data.max_players && !gameStarted.value && !data.winner.length) {
@@ -571,7 +558,7 @@ socket.onmessage = (event) => {
               console.log("CANNOT CLICK START GAME!!!");
               canClickStartGame.value = false;
             }
-            
+
             players.value = data.players.map(player => {
               return ({
                 name: player.player_name,
@@ -579,7 +566,7 @@ socket.onmessage = (event) => {
                 betCash: player.player_choices?.PlacedInPot?.PlacedInPot || 0,
                 faceUpCards: player.player_hand.cards.filter(card => card.face_up).map(card => [formatCard(card), false]),
                 faceDownCards: player.player_name === playerName.value || isSpectator.value
-                  ? player.player_hand.cards.filter(card => !card.face_up).map(card => [formatCard(card), false]) 
+                  ? player.player_hand.cards.filter(card => !card.face_up).map(card => [formatCard(card), false])
                   : player.player_hand.cards.filter(card => !card.face_up).map(() => ["", false]),
                 lastMove: player.last_move,
                 playerAction: player.player_action,
@@ -606,7 +593,8 @@ socket.onmessage = (event) => {
           if (
             (!data.players.find(p => p.player_name == playerName.value) &&
             !data.spectators.find(p => p.player_name == playerName.value) &&
-            data.lobby.find(p => p.player_name == playerName.value)) ||
+            data.lobby.find(p => p.player_name == playerName.value) &&
+            data.winner.length == 0) ||
             isDealer.value
           ) {
             canMakeLobbyAction.value = true;
@@ -622,6 +610,8 @@ socket.onmessage = (event) => {
               isDealer: true,
             };
             joinGameMenuData.value = local_data;
+          } else if (data.winner.length || data.players.find(p => p.player_name == playerName.value)) {
+            showJoinGameMenu.value = false;
           } else { // this is not the first player - show them generic options
             const local_data = {
               headerText: `Welcome! Next table is a ${gameVariant.value} game! What would you like to do?`,
@@ -650,7 +640,7 @@ socket.onmessage = (event) => {
             }
           }
         }
-        
+
         if (data.current_action_string) {
           currentAction.value = data.current_action_string;
         }
@@ -681,7 +671,24 @@ socket.onmessage = (event) => {
 const handleLogin = (data) => {
   playerName.value = data.username;
   playerNameEntered.value = true;
-  showJoinGameMenu.value = true;
+  if (players.value.find(p => p.name === data.username)) {
+    showJoinGameMenu.value = false;
+  } else {
+    showJoinGameMenu.value = true;
+  }
+  if (
+    ((!players.value.find(p => p.player_name == playerName.value) &&
+    !spectators.value.find(p => p.player_name == playerName.value) &&
+    lobby.value.find(p => p.player_name == playerName.value) &&
+    winners.value.length == 0) ||
+    isDealer.value) &&
+    showJoinGameMenu.value == false
+  ) {
+    canMakeLobbyAction.value = true;
+    clickEndMenu();
+  } else {
+    canMakeLobbyAction.value = false;
+  }
 };
 
 const resetClientState = () => {
@@ -719,7 +726,6 @@ const resetClientState = () => {
   selectCardsActive.value = true;
   currentAction.value = "Waiting to Start a Game...";
 };
-
 </script>
 
 <style scoped lang="postcss">

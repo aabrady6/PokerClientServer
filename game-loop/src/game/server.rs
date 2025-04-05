@@ -18,7 +18,7 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex, OnceLock};
 use tokio::io::{self, AsyncBufReadExt, BufReader};
 use tokio::sync::mpsc::Receiver;
-use tokio::sync::{broadcast, mpsc, Mutex as tMutex};
+use tokio::sync::{broadcast, mpsc, watch, Mutex as tMutex};
 use tokio::time::Duration;
 
 /// allows games to tell server to broadcast game state to all clients
@@ -160,6 +160,9 @@ pub struct Server {
     pub broadcast_sender: broadcast::Sender<()>,
     pub rx: tMutex<mpsc::Receiver<String>>,
     pub mpsc_tx: mpsc::Sender<String>,
+    pub joiners: tMutex<Vec<Player>>,
+    pub game_active_tx: watch::Sender<bool>,
+    pub game_active_rx: watch::Receiver<bool>,
 }
 
 impl Server {
@@ -198,6 +201,7 @@ impl Server {
         let (tx, _rx) = broadcast::channel(100); // Create a broadcast channel
         let (mpsc_tx, mpsc_rx) = mpsc::channel(100);
         BROADCAST_SENDER.set(tx.clone()).ok();
+        let (game_active_tx, game_active_rx) = watch::channel(false);
 
         let server = Arc::new(Self {
             game_state: tMutex::new(GameState::new()),
@@ -205,6 +209,9 @@ impl Server {
             broadcast_sender: tx,
             rx: tMutex::new(mpsc_rx),
             mpsc_tx,
+            joiners: tMutex::new(Vec::new()),
+            game_active_tx,
+            game_active_rx,
         });
 
         // // 🔹 Spawn the listener in a new task
@@ -344,8 +351,25 @@ impl Server {
     /// # Notes:
     /// - If no game action is received in time, a message is logged indicating a timeout.
     pub async fn game_lobby(data: &web::Data<Server>) {
-        // reset game data when creating lobby at start or after round end
-        // otherwise, keep exact same game state
+        let mut rx = data.game_active_rx.clone();
+        while *rx.borrow() {
+            rx.changed().await.unwrap();
+            println!("Game is not active. Moving all Players from joiners into lobby.");
+        }
+
+        {
+            let mut joiners_lock = data.joiners.lock().await;
+            if !joiners_lock.is_empty() {
+                let mut game_lock = data.game_state.lock().await;
+                for player in joiners_lock.clone().iter() {
+                    game_lock.lobby.push(player.clone());
+                    joiners_lock.retain(|p| p.player_name != player.player_name);
+                }
+            }
+        }
+
+        Server::broadcast_update(data).await;
+
         {
             let mut game_lock = data.game_state.lock().await;
             if game_lock.winner.len() > 0 {
@@ -475,7 +499,9 @@ impl Server {
             "{} players still in the lobby to talk to.",
             num_players_in_lobby
         );
-        // make sure to create the lobby for all players
+
+        Server::deactivate_game(&data).await;
+
         for _ in 0..num_players_in_lobby {
             let server_data_clone = data.clone();
             tokio::spawn(async move {
@@ -624,7 +650,9 @@ impl Server {
             "{} players still in the lobby to talk to.",
             num_players_in_lobby
         );
-        // make sure to create the lobby for all players
+
+        Server::deactivate_game(&data).await;
+
         for _ in 0..num_players_in_lobby {
             let server_data_clone = data.clone();
             tokio::spawn(async move {
@@ -757,7 +785,9 @@ impl Server {
             "{} players still in the lobby to talk to.",
             num_players_in_lobby
         );
-        // make sure to create the lobby for all players
+
+        Server::deactivate_game(&data).await;
+
         for _ in 0..num_players_in_lobby {
             let server_data_clone = data.clone();
             tokio::spawn(async move {
@@ -1747,6 +1777,24 @@ impl Server {
             _ => println!("Unknown join game message: {option} {dealer_option} {player_name}"),
         };
     }
+
+    /// Marks the game as active by setting the `game_active` flag to `true`.
+    ///
+    /// This function sends a `true` signal through the `game_active_tx` watch channel
+    /// in the [`Server`] instance, notifying all listeners that the game has started.
+    pub async fn activate_game(data: &web::Data<Server>) {
+        println!("Game is ACTIVE");
+        let _ = data.game_active_tx.send(true);
+    }
+
+    /// Marks the game as deactive by setting the `game_active` flag to `false`.
+    ///
+    /// This function sends a `true` signal through the `game_active_tx` watch channel
+    /// in the [`Server`] instance, notifying all listeners that the game has started.
+    pub async fn deactivate_game(data: &web::Data<Server>) {
+        println!("Game is NOT ACTIVE");
+        let _ = data.game_active_tx.send(false);
+    }
 }
 
 /// WebSocket handler for establishing a WebSocket connection with clients.
@@ -1859,10 +1907,21 @@ async fn startgame(data: web::Data<Server>) -> impl Responder {
 
     tokio::spawn(async move {
         match game_type.as_str() {
-            "5 Card Draw" => Server::five_card_game(server_data_clone).await,
-            "7 Card Stud" => Server::seven_card_game(server_data_clone).await,
-            "Texas Hold'em" => Server::texas_card_game(server_data_clone).await,
-            _ => println!("Cannot start game of unknown type"),
+            "5 Card Draw" => {
+                Server::activate_game(&server_data_clone).await;
+                Server::five_card_game(server_data_clone).await
+            }
+            "7 Card Stud" => {
+                Server::activate_game(&server_data_clone).await;
+                Server::seven_card_game(server_data_clone).await
+            }
+            "Texas Hold'em" => {
+                Server::activate_game(&server_data_clone).await;
+                Server::texas_card_game(server_data_clone).await
+            }
+            _ => {
+                println!("Cannot start game of unknown type")
+            }
         }
     });
     HttpResponse::Ok().json("{}")
@@ -1905,29 +1964,40 @@ async fn player_login(
         match login_player(username.clone(), password.clone()).await {
             Ok(player) => {
                 {
-                    let mut game_lock = data.game_state.lock().await;
+                    let game_lock = data.game_state.try_lock();
+                    match game_lock {
+                        Ok(mut game_lock) => {
+                            if let Some(existing_player) = game_lock
+                                .lobby
+                                .iter()
+                                .find(|p| p.player_name == player.player_name)
+                            {
+                                println!(
+                                    "Player '{:?}' is being replaced in the lobby.",
+                                    existing_player.player_name
+                                );
 
-                    if let Some(existing_player) = game_lock
-                        .lobby
-                        .iter()
-                        .find(|p| p.player_name == player.player_name)
-                    {
-                        println!(
-                            "Player '{:?}' is being replaced in the lobby.",
-                            existing_player.player_name
-                        );
+                                game_lock
+                                    .lobby
+                                    .retain(|p| p.player_name != player.player_name);
+                            } else {
+                                println!(
+                                    "Player '{}' is joining the lobby for the first time.",
+                                    player.player_name
+                                );
+                            }
 
-                        game_lock
-                            .lobby
-                            .retain(|p| p.player_name != player.player_name);
-                    } else {
-                        println!(
-                            "Player '{}' is joining the lobby for the first time.",
-                            player.player_name
-                        );
+                            {
+                                let mut joiners_lock = data.joiners.lock().await;
+                                joiners_lock.push(player.clone());
+                                println!("LOGING JOINER {:?}", joiners_lock);
+                            }
+                        }
+                        Err(..) => {
+                            let mut joiners_lock = data.joiners.lock().await;
+                            joiners_lock.push(player.clone());
+                        }
                     }
-
-                    game_lock.lobby.push(player.clone());
                 }
 
                 println!(
@@ -2030,8 +2100,9 @@ async fn player_register(
                             p.player_name
                         );
                         {
-                            let mut game_lock = data.game_state.lock().await;
-                            game_lock.lobby.push(p);
+                            let mut joiners_lock = data.joiners.lock().await;
+                            joiners_lock.push(p);
+                            println!("{:?}", joiners_lock);
                         }
                         Server::broadcast_update(&data).await;
 
