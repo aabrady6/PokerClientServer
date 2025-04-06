@@ -354,7 +354,7 @@ impl Server {
         let mut rx = data.game_active_rx.clone();
         while *rx.borrow() {
             rx.changed().await.unwrap();
-            println!("Game is not active. Moving all Players from joiners into lobby.");
+            println!("Game is active.");
         }
 
         {
@@ -748,6 +748,7 @@ impl Server {
         Server::betting_round(&data).await;
 
         {
+            let mut broke_game = false;
             let mut game_lock = data.game_state.lock().await;
             game_lock.determine_winner_texas().await;
             if game_lock.winner.len() > 1 {
@@ -757,7 +758,7 @@ impl Server {
                     game_lock.pot / game_lock.winner.len() as u32,
                     game_lock.winner[0].1
                 );
-            } else {
+            } else if game_lock.winner.len() == 1 {
                 game_lock.current_action_string = format!(
                     "{} wins ${} with hand {}",
                     game_lock.winner[0].0.player_name, game_lock.pot, game_lock.winner[0].1
@@ -769,10 +770,16 @@ impl Server {
                         game_lock.winner[0].0.player_name, game_lock.pot
                     )
                 }
+            } else {
+                game_lock.current_action_string = "No one won somehow :)".to_string();
+                game_lock.winner = Vec::new();
+                broke_game = true;
             }
-            game_lock.pay_winners().await;
-            game_lock.write_results_to_db().await;
-            game_lock.rotate_dealer().await;
+            if !broke_game {
+                game_lock.pay_winners().await;
+                game_lock.write_results_to_db().await;
+                game_lock.rotate_dealer().await;
+            }
         }
 
         Server::broadcast_update(&data).await;
@@ -1059,6 +1066,10 @@ impl Server {
             {
                 let mut rx = data.rx.lock().await;
                 let mut game_lock = data.game_state.lock().await;
+
+                if game_lock.get_remaining_player_count() == 1 {
+                    return;
+                }
 
                 match Self::wait_for_discard_action(&mut rx).await {
                     Some(discard_action) => match discard_action {

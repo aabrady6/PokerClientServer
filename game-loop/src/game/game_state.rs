@@ -591,6 +591,9 @@ impl GameState {
     /// The dealer token is set for the current dealer, the small blind token is set for the player to the left of the dealer,
     /// and the big blind token is set for the player two positions to the left of the dealer.
     pub fn set_player_tokens_blinds(&mut self) {
+        for player in &mut self.players {
+            player.token = "".to_string();
+        }
         let index_small = ((self.dealer + 1) % self.players.len() as u32) as usize;
         let index_big = ((self.dealer + 2) % self.players.len() as u32) as usize;
 
@@ -609,6 +612,9 @@ impl GameState {
     ///
     /// This method ensures that only the dealer is marked with the dealer token (`D`), without affecting other players.
     pub fn set_player_tokens_only_dealer(&mut self) {
+        for player in &mut self.players {
+            player.token = "".to_string();
+        }
         self.players[self.dealer as usize].token = "D".to_string();
     }
 

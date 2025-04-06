@@ -27,13 +27,13 @@
         @click="onControlsClick"
       />
       <div
-        v-if="isCurrentPlayer && selectCardsActive && discardRound"
+        v-if="isCurrentPlayer && discardRound"
         class="control_button"
         @click="submitOnClick"
       >
         SUBMIT
       </div>
-      <div v-if="winners.length" class="control_button" @click="clickEndMenu">
+      <div v-if="winners.length || canMakeLobbyAction" class="control_button" @click="clickEndMenu">
         END MENU
       </div>
       <div
@@ -135,7 +135,6 @@ const gameVariant = ref("");
 const spectators = ref([]);
 const dealerChoiceSpectators = ref([]);
 const lobby = ref([]);
-const selectCardsActive = ref(true);
 const currentAction = ref("Waiting to Start a Game...");
 const notInLobbyText = ref("Waiting for Game to End...");
 
@@ -266,9 +265,6 @@ const formatCard = (card) => {
 };
 
 const onCardClick = (card) => {
-  if (!selectCardsActive.value) {
-    return;
-  }
 
   const formattedCard = typeof card === "object" ? formatCard(card) : card;
 
@@ -295,8 +291,6 @@ const submitOnClick = () => {
   if (!discardRound.value) {
     return;
   }
-
-  selectCardsActive.value = false;
 
   const player = players.value.find(
     (player) => player.name === playerName.value
@@ -597,7 +591,11 @@ socket.onmessage = (event) => {
             data.winner.length == 0) ||
             isDealer.value
           ) {
-            canMakeLobbyAction.value = true;
+            if (data.winner.length == 0 && isDealer.value) {
+              canMakeLobbyAction.value = false;
+            } else {
+              canMakeLobbyAction.value = true;
+            }
           } else {
             canMakeLobbyAction.value = false;
           }
@@ -723,7 +721,6 @@ const resetClientState = () => {
   spectators.value = [];
   dealerChoiceSpectators.value = [];
   lobby.value = [];
-  selectCardsActive.value = true;
   currentAction.value = "Waiting to Start a Game...";
 };
 </script>
