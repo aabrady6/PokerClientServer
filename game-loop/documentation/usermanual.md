@@ -50,7 +50,7 @@ VITE_NODE_SERVER_PORT=3000
 ```
 
 For troubleshooting, ensure that the client and server are connected to the same local network. You can also check that the server is running correctly by pinging the server. For example:
-`ping xxx.xxx.xxx.xxx:8080`.
+`ping xxx.xxx.xxx.xxx`.
 
 ### Using the Client GUI
 
@@ -58,13 +58,13 @@ To use the client GUI, you will need to have Node installed on your machine. Ref
 
 Running the GUI requires two terminal windows. In the first window, navigate to the correct folder and run the command to start the connectivity script:
 ```
-cd game-loop/client_gui/poker_gui/
+cd game-loop/client_interface/poker_gui/
 node server.js
 ```
 
 Then, in the second terminal window, navigate to the same folder and start up the GUI front end:
 ```
-cd game-loop/client_gui/poker_gui/
+cd game-loop/client_interface/poker_gui/
 npm run dev
 ```
 This will open the front end at the address `http://localhost:5173/`. Navigate to this address using your preferred web browser to connect.
@@ -75,7 +75,17 @@ To use the client CLI, you will need Rust and Cargo installed on your machine. R
 
 Running the CLI requires one terminal window. Navigate to the correct folder and run the command to start the client:
 ```
-cd game-loop/client_cli/
+cd game-loop/client_interface/client_cli/
+```
+
+In `*/client_interface/client_cli/`, create a `.env` file with the following variables, replacing xxx.xx.xx.xx with the actual server IP address:
+```
+RUST_SERVER_IP=xxx.xxx.xxx.xxx
+RUST_SERVER_PORT=8080
+```
+
+Run the following command to run the cli based client:
+```
 cargo run
 ```
 

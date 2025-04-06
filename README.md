@@ -80,7 +80,7 @@ However, the `reset` command should only be used while the table is empty, and n
 
 ## Client Steps
 ### 1. Set the Server IP Address to Join
-In `*/client_gui/poker_gui/`, create a .env file with the following variables, replacing xxx.xx.xx.xx with the actual server IP address:
+In `*/client_interface/poker_gui/`, create a .env file with the following variables, replacing xxx.xx.xx.xx with the actual server IP address:
 ```
 VITE_RUST_SERVER_IP=xxx.xx.xx.xx
 VITE_RUST_SERVER_PORT=8080
@@ -105,9 +105,18 @@ Naviagte to `http://localhost:5173/` and the login screen will be visible.
 ### 2b. Connecting via CLI
 Navigate to the client code in the project and run the application:
 ```
-cd game-loop/client_cli
+cd game-loop/client_interface/client_cli/
+```
+
+In `*/client_interface/client_cli/`, create a `.env` file with the following variables, replacing xxx.xx.xx.xx with the actual server IP address:
+```
+RUST_SERVER_IP=xxx.xxx.xxx.xxx
+RUST_SERVER_PORT=8080
+```
+
+Run the following command to run the cli based client:
+```
 cargo run
 ```
 
 This will open the client application in the current terminal window. Follow the prompts on the screen to play poker!
-
