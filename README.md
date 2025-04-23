@@ -1,6 +1,8 @@
 # Poker Project Balatro
 Aaron Brady, Jason Gillanders, Francis Doll
 
+![](/images/texas_holdem.png)
+
 ---
 
 # Overview
@@ -14,6 +16,8 @@ Upon signing in, users can:
 * Spectate a game
 * View individual player stats
 * View past game stats
+
+![](/images/five_card.png)
 
 ---
 
